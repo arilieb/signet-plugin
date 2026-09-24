@@ -1,0 +1,46 @@
+# pyproject.toml
+
+[build-system]
+
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "SignetPlugin"
+version = "0.0.1"
+description = "Signet plugin for Locksmith application to walk Onyx's UDAP vLEI onboarding flow."
+readme = "README.md"
+requires-python = ">=3.12.9"
+license = { text = "MIT" }
+
+authors = [
+    { name = "Ari Argoud", email = "ariargoud@gmail.com" },
+]
+
+keywords = ["healthKERI", "cryptography", "KERI", "ACDC", "UDAP", "vLEI"]
+
+classifiers = [
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "locksmith>=0.0.1",
+    "httpx==0.28.1"
+]
+
+
+[project.entry-points."locksmith.plugins"]
+signet = "signet.plugin:SignetPlugin"
+
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["*"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
