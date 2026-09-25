@@ -8,6 +8,7 @@ Connections list page -- shows the vault's UDAP vLEI onboarding connections
 each status. Refresh is row-action-only: PaginatedTableWidget has no
 built-in table-wide refresh button.
 """
+
 from typing import Any
 
 import qasync
@@ -26,6 +27,7 @@ from .status import STATUS_DISPLAY as _STATUS_DISPLAY
 from .view import ViewConnectionDialog
 
 logger = help.ogler.getLogger(__name__)
+
 
 class ConnectionsListPage(LocksmithFormPage):
     """Paginated list of signet connections and their onboarding status."""
@@ -136,7 +138,9 @@ class ConnectionsListPage(LocksmithFormPage):
     @guarded("Failed to add connection.")
     def _on_add_connection(self):
         """Handle Add Connection click."""
-        dialog = AddConnectionDialog(app=self.app, on_success=self._load_connections, parent=self)
+        dialog = AddConnectionDialog(
+            app=self.app, on_success=self._load_connections, parent=self
+        )
         dialog.show()
 
     @guarded("Failed to perform the requested action.")
@@ -225,7 +229,9 @@ class ConnectionsListPage(LocksmithFormPage):
             return
 
         previous_status = connection.status
-        result = await remoting.poll_onboarding(connection.base_url, connection.onboarding_id)
+        result = await remoting.poll_onboarding(
+            connection.base_url, connection.onboarding_id
+        )
         if not result.get("success"):
             self.show_error(result.get("error", "Failed to refresh connection status."))
             return
