@@ -4,11 +4,10 @@ signet.connections.list module
 
 Connections list page -- shows the vault's UDAP vLEI onboarding connections
 (Onyx, and other partners), their approval status, and the row action
-("Refresh" or "Proceed with Dynamic Client Registration") available for
+("Refresh" or "Register") available for
 each status. Refresh is row-action-only: PaginatedTableWidget has no
 built-in table-wide refresh button.
 """
-
 from typing import Any
 
 import qasync
@@ -20,6 +19,11 @@ from locksmith.ui.toolkit.tables import PaginatedTableWidget
 from locksmith.ui.toolkit.widgets.page import LocksmithFormPage, guarded
 
 from ..core import remoting
+from .add import AddConnectionDialog
+from .dcr_gate import DynamicClientRegistrationGateDialog
+from .status import ROW_ACTION_ICONS as _ROW_ACTION_ICONS
+from .status import STATUS_DISPLAY as _STATUS_DISPLAY
+from .view import ViewConnectionDialog
 
 logger = help.ogler.getLogger(__name__)
 
@@ -36,7 +40,8 @@ _STATUS_DISPLAY = {
 
 _ROW_ACTION_ICONS = {
     "Refresh": ":/assets/material-icons/refresh.svg",
-    "Proceed with Dynamic Client Registration": ":/assets/material-icons/shield_lock.svg",
+    "Register": ":/assets/material-icons/shield_lock.svg",
+    "Delete": ":/assets/material-icons/delete.svg",
 }
 
 
@@ -75,6 +80,7 @@ class ConnectionsListPage(LocksmithFormPage):
 
         self.table.add_clicked.connect(self._on_add_connection)
         self.table.row_action_triggered.connect(self._on_row_action_signal)
+        self.table.row_clicked.connect(self._on_row_clicked)
 
         self.content_layout.addWidget(self.table)
 
@@ -94,9 +100,11 @@ class ConnectionsListPage(LocksmithFormPage):
         if status == "needs_approval":
             actions = ["Refresh"]
         elif status == "approved":
-            actions = ["Proceed with Dynamic Client Registration"]
+            actions = ["Register"]
         else:
             actions = []
+        actions.append("View")
+        actions.append("Delete")
         return actions, _ROW_ACTION_ICONS
 
     def _transform_connection_to_row(self, connection) -> dict[str, Any]:
@@ -145,14 +153,25 @@ class ConnectionsListPage(LocksmithFormPage):
 
     @guarded("Failed to add connection.")
     def _on_add_connection(self):
-        """Handle Add Connection click.
+        """Handle Add Connection click."""
+        dialog = AddConnectionDialog(app=self.app, on_success=self._load_connections, parent=self)
+        dialog.show()
 
-        AddConnectionDialog is implemented in a follow-up pass; the button
-        is wired up but currently a no-op.
-        """
-        logger.info(
-            "Add Connection clicked, but AddConnectionDialog is not yet implemented"
+    @guarded("Failed to perform the requested action.")
+    def _on_row_clicked(self, row_data: Any):
+        """Handle row click to open the read-only view dialog."""
+        if not isinstance(row_data, dict):
+            return
+        connection_id = row_data.get("_connection_id", "")
+        if not connection_id:
+            return
+        dialog = ViewConnectionDialog(
+            app=self.app,
+            connection_id=connection_id,
+            on_success=self._load_connections,
+            parent=self,
         )
+        dialog.show()
 
     @guarded("Failed to perform the requested action.")
     def _on_row_action_signal(self, row_data: dict[str, Any], action: str):
@@ -161,15 +180,55 @@ class ConnectionsListPage(LocksmithFormPage):
 
         if action == "Refresh":
             self._refresh_connection(connection_id)
-        elif action == "Proceed with Dynamic Client Registration":
-            # DynamicClientRegistrationGateDialog is implemented in a
-            # follow-up pass; the row action is wired up but currently a
-            # no-op.
-            logger.info(
-                f"DCR requested for connection {connection_id}, but the gate dialog is not yet implemented"
+        elif action == "Register":
+            dialog = DynamicClientRegistrationGateDialog(
+                app=self.app,
+                connection_id=connection_id,
+                on_success=self._load_connections,
+                parent=self,
             )
+            dialog.show()
+        elif action == "View":
+            dialog = ViewConnectionDialog(
+                app=self.app,
+                connection_id=connection_id,
+                on_success=self._load_connections,
+                parent=self,
+            )
+            dialog.show()
+        elif action == "Delete":
+            self._on_delete_connection(row_data)
         else:
             logger.warning(f"Unknown row action: {action}")
+
+    def _on_delete_connection(self, row_data: dict[str, Any]):
+        """Open the delete confirmation dialog for the selected connection."""
+        from .delete import DeleteConnectionDialog
+
+        db = self._get_db()
+        if db is None:
+            self.show_error("No signet database available.")
+            return
+
+        connection_id = row_data.get("_connection_id", "")
+        display_name = row_data.get("Connection", "") or connection_id
+        if not connection_id:
+            logger.error("Cannot delete: no connection_id found")
+            return
+
+        dialog = DeleteConnectionDialog(
+            db=db,
+            connection_id=connection_id,
+            display_name=display_name,
+            on_success=self._on_connection_deleted,
+            parent=self,
+        )
+        dialog.open()
+
+    def _on_connection_deleted(self, connection_id: str):
+        """Reload the table after a connection has been deleted."""
+        logger.info(f"Connection {connection_id} deleted, reloading list")
+        self._load_connections()
 
     @qasync.asyncSlot()
     async def _refresh_connection(self, connection_id: str):
@@ -183,9 +242,8 @@ class ConnectionsListPage(LocksmithFormPage):
             self.show_error("Connection not found.")
             return
 
-        result = await remoting.poll_onboarding(
-            connection.base_url, connection.onboarding_id
-        )
+        previous_status = connection.status
+        result = await remoting.poll_onboarding(connection.base_url, connection.onboarding_id)
         if not result.get("success"):
             self.show_error(result.get("error", "Failed to refresh connection status."))
             return
@@ -196,6 +254,17 @@ class ConnectionsListPage(LocksmithFormPage):
         db.signet_connections.pin(keys=(connection_id,), val=connection)
 
         self._load_connections()
+
+        # Per spec: a refresh that crosses needs_approval -> approved should
+        # pop the DCR gate dialog automatically.
+        if previous_status == "needs_approval" and connection.status == "approved":
+            dialog = DynamicClientRegistrationGateDialog(
+                app=self.app,
+                connection_id=connection_id,
+                on_success=self._load_connections,
+                parent=self,
+            )
+            dialog.show()
 
     def on_show(self):
         """Called when page becomes visible - load connections."""
