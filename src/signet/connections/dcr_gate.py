@@ -8,6 +8,7 @@ action, the view dialog's action button, and automatically whenever a
 refresh transitions a connection from needs_approval to approved (list row
 action, view dialog refresh, or the tail of the add-connection flow).
 """
+
 from collections.abc import Callable
 
 import qasync
@@ -15,7 +16,11 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 from keri import help
 
 from locksmith.ui import colors
-from locksmith.ui.toolkit.widgets import LocksmithButton, LocksmithDialog, LocksmithInvertedButton
+from locksmith.ui.toolkit.widgets import (
+    LocksmithButton,
+    LocksmithDialog,
+    LocksmithInvertedButton,
+)
 
 from ..core import remoting
 
@@ -25,7 +30,13 @@ logger = help.ogler.getLogger(__name__)
 class DynamicClientRegistrationGateDialog(LocksmithDialog):
     """Confirm/cancel dialog gating manual Dynamic Client Registration."""
 
-    def __init__(self, app, connection_id: str, on_success: Callable[[], None] | None = None, parent=None):
+    def __init__(
+        self,
+        app,
+        connection_id: str,
+        on_success: Callable[[], None] | None = None,
+        parent=None,
+    ):
         self.app = app
         self.connection_id = connection_id
         self.on_success = on_success
@@ -34,7 +45,9 @@ class DynamicClientRegistrationGateDialog(LocksmithDialog):
         layout = QVBoxLayout(content_widget)
         layout.setContentsMargins(0, 10, 0, 0)
 
-        message = QLabel("Approval has been granted, proceed with dynamic client registration?")
+        message = QLabel(
+            "Approval has been granted, proceed with dynamic client registration?"
+        )
         message.setWordWrap(True)
         message.setStyleSheet(f"font-size: 14px; color: {colors.TEXT_PRIMARY};")
         layout.addWidget(message)
@@ -87,10 +100,14 @@ class DynamicClientRegistrationGateDialog(LocksmithDialog):
                 "purpose": connection.purpose,
                 "onboarding_id": connection.onboarding_id,
             }
-            result = await remoting.register_dynamic_client(connection.base_url, approved_purpose_grant)
+            result = await remoting.register_dynamic_client(
+                connection.base_url, approved_purpose_grant
+            )
 
             if not result.get("success"):
-                self.show_error(result.get("error", "Dynamic client registration failed."))
+                self.show_error(
+                    result.get("error", "Dynamic client registration failed.")
+                )
                 self.confirm_button.setEnabled(True)
                 self.confirm_button.setText("Proceed")
                 self.cancel_button.setEnabled(True)
@@ -100,14 +117,18 @@ class DynamicClientRegistrationGateDialog(LocksmithDialog):
             connection.client_id = result.get("client_id", "")
             db.signet_connections.pin(keys=(self.connection_id,), val=connection)
 
-            logger.info(f"Connection {self.connection_id} registered with client_id {connection.client_id}")
+            logger.info(
+                f"Connection {self.connection_id} registered with client_id {connection.client_id}"
+            )
 
             if self.on_success:
                 self.on_success()
 
             self.accept()
         except Exception as exc:
-            logger.exception(f"DynamicClientRegistrationGateDialog: registration failed: {exc}")
+            logger.exception(
+                f"DynamicClientRegistrationGateDialog: registration failed: {exc}"
+            )
             self.show_error(f"Dynamic client registration failed: {exc}")
             self.confirm_button.setEnabled(True)
             self.confirm_button.setText("Proceed")

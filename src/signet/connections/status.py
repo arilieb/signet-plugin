@@ -5,6 +5,7 @@ signet.connections.status module
 Shared status -> display mapping used by the connections list, view dialog,
 and DCR gate so all three stay in sync on colors/labels/icons.
 """
+
 from locksmith.ui import colors
 
 # Collapses the onboarding design doc's 7-state machine into the 3 buckets
