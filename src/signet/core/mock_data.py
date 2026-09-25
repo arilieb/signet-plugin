@@ -6,6 +6,7 @@ Canned responses for the UDAP vLEI onboarding + Dynamic Client Registration
 flow, and seed connections used to demo the Connections list before Onyx's
 servers exist. Only active when signet.core.configing.is_mock_mode() is True.
 """
+
 import uuid
 from typing import Any, Dict
 
@@ -54,10 +55,10 @@ _POLLED_ONCE: set = set()
 def mock_submit_onboarding(connection_packet: Dict[str, Any]) -> Dict[str, Any]:
     """Canned 202 Accepted response for POST /udap/onboarding."""
     return {
-        'success': True,
-        'onboarding_id': f"onboarding-{uuid.uuid4().hex[:12]}",
-        'status': 'pending-verification',
-        'retry_after': '30',
+        "success": True,
+        "onboarding_id": f"onboarding-{uuid.uuid4().hex[:12]}",
+        "status": "pending-verification",
+        "retry_after": "30",
     }
 
 
@@ -72,27 +73,29 @@ def mock_poll_onboarding(onboarding_id: str) -> Dict[str, Any]:
     """
     if onboarding_id in _POLLED_ONCE:
         return {
-            'success': True,
-            'terminal': True,
-            'status': 'approved',
-            'data': {'onboarding_id': onboarding_id, 'status': 'approved'},
+            "success": True,
+            "terminal": True,
+            "status": "approved",
+            "data": {"onboarding_id": onboarding_id, "status": "approved"},
         }
 
     _POLLED_ONCE.add(onboarding_id)
     return {
-        'success': True,
-        'terminal': False,
-        'status': 'pending-verification',
-        'data': {'onboarding_id': onboarding_id, 'status': 'pending-verification'},
+        "success": True,
+        "terminal": False,
+        "status": "pending-verification",
+        "data": {"onboarding_id": onboarding_id, "status": "pending-verification"},
     }
 
 
-def mock_register_dynamic_client(approved_purpose_grant: Dict[str, Any]) -> Dict[str, Any]:
+def mock_register_dynamic_client(
+    approved_purpose_grant: Dict[str, Any],
+) -> Dict[str, Any]:
     """Canned 201 Created response for POST /register (UDAP DCR)."""
     return {
-        'success': True,
-        'client_id': f"client-{uuid.uuid4().hex[:12]}",
-        'scopes': approved_purpose_grant.get('scope', 'system/Patient.read'),
+        "success": True,
+        "client_id": f"client-{uuid.uuid4().hex[:12]}",
+        "scopes": approved_purpose_grant.get("scope", "system/Patient.read"),
     }
 
 
