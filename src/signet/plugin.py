@@ -9,6 +9,7 @@ this plugin needs no setup gate or account-creation flow. FHIR APIs is a
 disabled placeholder menu entry with no page registered -- it exists but
 never triggers navigation.
 """
+
 from __future__ import annotations
 
 from PySide6.QtGui import QIcon
@@ -68,8 +69,12 @@ class SignetPlugin(PluginBase):
     def _create_submenu_items(self) -> list[QWidget]:
         items: list[QWidget] = [BackButton(dark_mode=False), MenuSpacer(10)]
 
-        connections_btn = MenuButton(QIcon(":/assets/material-icons/p2p.svg"), "Connections")
-        connections_btn.clicked.connect(self._make_nav_handler("signet_connections_list", connections_btn))
+        connections_btn = MenuButton(
+            QIcon(":/assets/material-icons/p2p.svg"), "Connections"
+        )
+        connections_btn.clicked.connect(
+            self._make_nav_handler("signet_connections_list", connections_btn)
+        )
         items.append(connections_btn)
         self._nav_buttons_by_page["signet_connections_list"] = connections_btn
 
@@ -88,6 +93,7 @@ class SignetPlugin(PluginBase):
                     item.set_active(False)
             button.set_active(True)
             self._navigate(page_key)
+
         return handler
 
     def _navigate(self, page_key: str) -> None:
@@ -113,7 +119,9 @@ class SignetPlugin(PluginBase):
 
         if next(self._db.signet_connections.getItemIter(), None) is None:
             for connection in mock_data.seed_connections():
-                self._db.signet_connections.pin(keys=(connection.connection_id,), val=connection)
+                self._db.signet_connections.pin(
+                    keys=(connection.connection_id,), val=connection
+                )
 
     def on_vault_closed(self, vault) -> None:
         vault.plugin_state.pop("signet", None)

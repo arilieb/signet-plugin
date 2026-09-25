@@ -7,6 +7,7 @@ vLEI onboarding servers per the design doc, but short-circuit to canned
 responses in mock_data when running in the DEVELOPMENT environment, so the
 Connections flow is clickable/demoable before those servers exist.
 """
+
 from locksmith.core.configing import Environments, LocksmithConfig
 
 # Placeholder base URL for Onyx's UDAP onboarding servers. Real per-connection
