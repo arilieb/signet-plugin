@@ -4,7 +4,7 @@ signet.connections.list module
 
 Connections list page -- shows the vault's UDAP vLEI onboarding connections
 (Onyx, and other partners), their approval status, and the row action
-("Refresh" or "Proceed with Dynamic Client Registration") available for
+("Refresh" or "Register") available for
 each status. Refresh is row-action-only: PaginatedTableWidget has no
 built-in table-wide refresh button.
 """
@@ -19,24 +19,13 @@ from locksmith.ui.toolkit.tables import PaginatedTableWidget
 from locksmith.ui.toolkit.widgets.page import LocksmithFormPage, guarded
 
 from ..core import remoting
+from .add import AddConnectionDialog
+from .dcr_gate import DynamicClientRegistrationGateDialog
+from .status import ROW_ACTION_ICONS as _ROW_ACTION_ICONS
+from .status import STATUS_DISPLAY as _STATUS_DISPLAY
+from .view import ViewConnectionDialog
 
 logger = help.ogler.getLogger(__name__)
-
-# Collapses the onboarding design doc's 7-state machine into the 3 buckets
-# the spec calls out, plus a 4th terminal "rejected" bucket the doc requires
-# but the spec didn't explicitly design for -- styled like needs_approval
-# but with no actions available, since it's terminal.
-_STATUS_DISPLAY = {
-    "needs_approval": ("Needs Approval", colors.DANGER),
-    "approved": ("Approved", colors.WARNING_YELLOW),
-    "rejected": ("Rejected", colors.DANGER),
-    "registered": ("Registered", colors.SUCCESS_INDICATOR),
-}
-
-_ROW_ACTION_ICONS = {
-    "Refresh": ":/assets/material-icons/refresh.svg",
-    "Proceed with Dynamic Client Registration": ":/assets/material-icons/shield_lock.svg",
-}
 
 
 class ConnectionsListPage(LocksmithFormPage):
@@ -74,6 +63,7 @@ class ConnectionsListPage(LocksmithFormPage):
 
         self.table.add_clicked.connect(self._on_add_connection)
         self.table.row_action_triggered.connect(self._on_row_action_signal)
+        self.table.row_clicked.connect(self._on_row_clicked)
 
         self.content_layout.addWidget(self.table)
 
@@ -89,11 +79,11 @@ class ConnectionsListPage(LocksmithFormPage):
         """Determine which row action to show based on connection status."""
         status = row_data.get("_status", "")
         if status == "needs_approval":
-            actions = ["Refresh"]
+            actions = ["Refresh", "View"]
         elif status == "approved":
-            actions = ["Proceed with Dynamic Client Registration"]
+            actions = ["Register", "View"]
         else:
-            actions = []
+            actions = ["View"]
         return actions, _ROW_ACTION_ICONS
 
     def _transform_connection_to_row(self, connection) -> dict[str, Any]:
@@ -136,12 +126,25 @@ class ConnectionsListPage(LocksmithFormPage):
 
     @guarded("Failed to add connection.")
     def _on_add_connection(self):
-        """Handle Add Connection click.
+        """Handle Add Connection click."""
+        dialog = AddConnectionDialog(app=self.app, on_success=self._load_connections, parent=self)
+        dialog.show()
 
-        AddConnectionDialog is implemented in a follow-up pass; the button
-        is wired up but currently a no-op.
-        """
-        logger.info("Add Connection clicked, but AddConnectionDialog is not yet implemented")
+    @guarded("Failed to perform the requested action.")
+    def _on_row_clicked(self, row_data: Any):
+        """Handle row click to open the read-only view dialog."""
+        if not isinstance(row_data, dict):
+            return
+        connection_id = row_data.get("_connection_id", "")
+        if not connection_id:
+            return
+        dialog = ViewConnectionDialog(
+            app=self.app,
+            connection_id=connection_id,
+            on_success=self._load_connections,
+            parent=self,
+        )
+        dialog.show()
 
     @guarded("Failed to perform the requested action.")
     def _on_row_action_signal(self, row_data: dict[str, Any], action: str):
@@ -150,11 +153,22 @@ class ConnectionsListPage(LocksmithFormPage):
 
         if action == "Refresh":
             self._refresh_connection(connection_id)
-        elif action == "Proceed with Dynamic Client Registration":
-            # DynamicClientRegistrationGateDialog is implemented in a
-            # follow-up pass; the row action is wired up but currently a
-            # no-op.
-            logger.info(f"DCR requested for connection {connection_id}, but the gate dialog is not yet implemented")
+        elif action == "Register":
+            dialog = DynamicClientRegistrationGateDialog(
+                app=self.app,
+                connection_id=connection_id,
+                on_success=self._load_connections,
+                parent=self,
+            )
+            dialog.show()
+        elif action == "View":
+            dialog = ViewConnectionDialog(
+                app=self.app,
+                connection_id=connection_id,
+                on_success=self._load_connections,
+                parent=self,
+            )
+            dialog.show()
         else:
             logger.warning(f"Unknown row action: {action}")
 
@@ -170,6 +184,7 @@ class ConnectionsListPage(LocksmithFormPage):
             self.show_error("Connection not found.")
             return
 
+        previous_status = connection.status
         result = await remoting.poll_onboarding(connection.base_url, connection.onboarding_id)
         if not result.get("success"):
             self.show_error(result.get("error", "Failed to refresh connection status."))
@@ -181,6 +196,17 @@ class ConnectionsListPage(LocksmithFormPage):
         db.signet_connections.pin(keys=(connection_id,), val=connection)
 
         self._load_connections()
+
+        # Per spec: a refresh that crosses needs_approval -> approved should
+        # pop the DCR gate dialog automatically.
+        if previous_status == "needs_approval" and connection.status == "approved":
+            dialog = DynamicClientRegistrationGateDialog(
+                app=self.app,
+                connection_id=connection_id,
+                on_success=self._load_connections,
+                parent=self,
+            )
+            dialog.show()
 
     def on_show(self):
         """Called when page becomes visible - load connections."""
