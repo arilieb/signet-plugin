@@ -9,6 +9,7 @@ inline -- per the onboarding design doc's idempotency semantics. Discovery
 of partners is assumed already done; the dropdown is just the fixture list
 in mock_data minus whichever partners already have a SignetConnection.
 """
+
 from collections.abc import Callable
 
 import qasync
@@ -17,7 +18,11 @@ from keri import help
 from keri.help import helping
 
 from locksmith.ui import colors
-from locksmith.ui.toolkit.widgets import LocksmithButton, LocksmithDialog, LocksmithInvertedButton
+from locksmith.ui.toolkit.widgets import (
+    LocksmithButton,
+    LocksmithDialog,
+    LocksmithInvertedButton,
+)
 from locksmith.ui.toolkit.widgets.fields import FloatingLabelComboBox
 
 from ..core import credentials, mock_data, remoting
@@ -103,7 +108,10 @@ class AddConnectionDialog(LocksmithDialog):
         db = self._get_db()
         existing_ids: set[str] = set()
         if db is not None:
-            existing_ids = {connection_id for connection_id, _ in db.signet_connections.getItemIter()}
+            existing_ids = {
+                connection_id
+                for connection_id, _ in db.signet_connections.getItemIter()
+            }
 
         self.partner_selector.clear()
         self._partner_by_display.clear()
@@ -179,9 +187,13 @@ class AddConnectionDialog(LocksmithDialog):
                 "credential_said": credential.get("said", ""),
             }
 
-            submit_result = await remoting.submit_onboarding(partner["base_url"], connection_packet)
+            submit_result = await remoting.submit_onboarding(
+                partner["base_url"], connection_packet
+            )
             if not submit_result.get("success"):
-                self.show_error(submit_result.get("error", "Failed to submit onboarding request."))
+                self.show_error(
+                    submit_result.get("error", "Failed to submit onboarding request.")
+                )
                 return
 
             onboarding_id = submit_result.get("onboarding_id", "")
@@ -190,7 +202,9 @@ class AddConnectionDialog(LocksmithDialog):
             # Per the design doc's idempotency semantics, immediately follow
             # the submission with one poll to catch an already-approved
             # decision.
-            poll_result = await remoting.poll_onboarding(partner["base_url"], onboarding_id)
+            poll_result = await remoting.poll_onboarding(
+                partner["base_url"], onboarding_id
+            )
             if poll_result.get("success") and poll_result.get("terminal"):
                 status = poll_result.get("status", status)
 
@@ -207,7 +221,9 @@ class AddConnectionDialog(LocksmithDialog):
             )
             db.signet_connections.pin(keys=(connection.connection_id,), val=connection)
 
-            logger.info(f"Added connection {connection.connection_id} with status {connection.status}")
+            logger.info(
+                f"Added connection {connection.connection_id} with status {connection.status}"
+            )
 
             self.close()
 
@@ -238,6 +254,7 @@ class AddConnectionDialog(LocksmithDialog):
 
     def _open_dcr_gate(self, connection: SignetConnection):
         from .dcr_gate import DynamicClientRegistrationGateDialog
+
         dialog = DynamicClientRegistrationGateDialog(
             app=self.app,
             connection_id=connection.connection_id,

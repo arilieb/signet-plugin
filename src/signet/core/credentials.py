@@ -12,6 +12,7 @@ in this codebase (acdc-auth-server/schema/sample-vlei-graph/) has qvi,
 legal-entity, ecr, and ecr-auth schemas but nothing named "subunit".
 LEGAL_ENTITY_SUBUNIT_SCHEMA_SAID is a placeholder pending the real schema.
 """
+
 from typing import Any
 
 from keri import help
@@ -45,10 +46,12 @@ def filter_legal_entity_subunit_credentials(vault) -> list[dict[str, Any]]:
             schemer = credential.get("schema")
             if schemer is None or schemer.said != LEGAL_ENTITY_SUBUNIT_SCHEMA_SAID:
                 continue
-            matching.append({
-                "said": credential.get("sad", {}).get("d", ""),
-                "title": schemer.sed.get("title", ""),
-            })
+            matching.append(
+                {
+                    "said": credential.get("sad", {}).get("d", ""),
+                    "title": schemer.sed.get("title", ""),
+                }
+            )
 
     if not matching and is_mock_mode():
         matching.append(dict(_MOCK_CREDENTIAL))

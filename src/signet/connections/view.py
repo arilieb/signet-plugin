@@ -7,15 +7,27 @@ status badge, plus exactly one conditional action button (mutually
 exclusive per status): "Refresh" while needs_approval, "Register" once approved,
 no button once rejected or registered.
 """
+
 from collections.abc import Callable
 
 import qasync
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QSpacerItem, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QSpacerItem,
+    QVBoxLayout,
+    QWidget,
+)
 from keri import help
 from keri.help import helping
 
 from locksmith.ui import colors
-from locksmith.ui.toolkit.widgets import LocksmithButton, LocksmithDialog, LocksmithInvertedButton
+from locksmith.ui.toolkit.widgets import (
+    LocksmithButton,
+    LocksmithDialog,
+    LocksmithInvertedButton,
+)
 
 from ..core import remoting
 from .status import STATUS_DISPLAY
@@ -26,7 +38,13 @@ logger = help.ogler.getLogger(__name__)
 class ViewConnectionDialog(LocksmithDialog):
     """Read-only view of a signet connection with one status-dependent action button."""
 
-    def __init__(self, app, connection_id: str, on_success: Callable[[], None] | None = None, parent=None):
+    def __init__(
+        self,
+        app,
+        connection_id: str,
+        on_success: Callable[[], None] | None = None,
+        parent=None,
+    ):
         self.app = app
         self.connection_id = connection_id
         self.on_success = on_success
@@ -119,7 +137,9 @@ class ViewConnectionDialog(LocksmithDialog):
 
         status_label = QLabel("Status:")
         status_label.setStyleSheet("font-weight: 600; font-size: 13px;")
-        display, color = STATUS_DISPLAY.get(connection.status, ("Unknown", colors.DANGER))
+        display, color = STATUS_DISPLAY.get(
+            connection.status, ("Unknown", colors.DANGER)
+        )
         badge = QLabel(display)
         badge.setStyleSheet(f"font-size: 13px; color: {color};")
         info_grid.addWidget(status_label, row, 0)
@@ -127,7 +147,9 @@ class ViewConnectionDialog(LocksmithDialog):
         row += 1
 
         row = self._add_field_row(info_grid, row, "URL", connection.base_url or "—")
-        row = self._add_field_row(info_grid, row, "Credential", connection.selected_credential_said or "—")
+        row = self._add_field_row(
+            info_grid, row, "Credential", connection.selected_credential_said or "—"
+        )
         if connection.client_id:
             row = self._add_field_row(info_grid, row, "Client ID", connection.client_id)
 
@@ -181,7 +203,9 @@ class ViewConnectionDialog(LocksmithDialog):
         self.action_btn.setText("Refreshing...")
 
         previous_status = connection.status
-        result = await remoting.poll_onboarding(connection.base_url, connection.onboarding_id)
+        result = await remoting.poll_onboarding(
+            connection.base_url, connection.onboarding_id
+        )
         if not result.get("success"):
             self.show_error(result.get("error", "Failed to refresh connection status."))
             self.action_btn.setEnabled(True)
@@ -206,6 +230,7 @@ class ViewConnectionDialog(LocksmithDialog):
 
     def _open_dcr_gate(self):
         from .dcr_gate import DynamicClientRegistrationGateDialog
+
         dialog = DynamicClientRegistrationGateDialog(
             app=self.app,
             connection_id=self.connection_id,
