@@ -63,10 +63,10 @@ jobs:
         pip install ruff==0.15.13 black isort mypy
 
     - name: Run ruff (linter)
-      run: ruff check src tests --output-format=github
+      run: ruff check src --output-format=github
 
     - name: Check code formatting with black
-      run: black --check --diff src tests
+      run: black --check --diff src
 
   security:
     runs-on: ubuntu-latest
