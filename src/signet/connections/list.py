@@ -27,20 +27,6 @@ from .view import ViewConnectionDialog
 
 logger = help.ogler.getLogger(__name__)
 
-_STATUS_DISPLAY = {
-    "needs_approval": ("Needs Approval", colors.DANGER),
-    "approved": ("Approved", colors.WARNING_YELLOW),
-    "rejected": ("Rejected", colors.DANGER),
-    "registered": ("Registered", colors.SUCCESS_INDICATOR),
-}
-
-_ROW_ACTION_ICONS = {
-    "Refresh": ":/assets/material-icons/refresh.svg",
-    "Register": ":/assets/material-icons/shield_lock.svg",
-    "Delete": ":/assets/material-icons/delete.svg",
-}
-
-
 class ConnectionsListPage(LocksmithFormPage):
     """Paginated list of signet connections and their onboarding status."""
 
