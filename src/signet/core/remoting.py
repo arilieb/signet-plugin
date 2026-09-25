@@ -14,6 +14,7 @@ Every function returns the same {'success': bool, ...} / {'success': False,
 castellan/core/remoting.py), so callers can use the same result['success']
 check idiom.
 """
+
 from typing import Any, Dict
 
 import httpx
@@ -27,7 +28,9 @@ logger = help.ogler.getLogger(__name__)
 _TIMEOUT = 30.0
 
 
-async def submit_onboarding(base_url: str, connection_packet: Dict[str, Any]) -> Dict[str, Any]:
+async def submit_onboarding(
+    base_url: str, connection_packet: Dict[str, Any]
+) -> Dict[str, Any]:
     """
     POST {base_url}/udap/onboarding -- submit a new onboarding request.
 
@@ -39,21 +42,23 @@ async def submit_onboarding(base_url: str, connection_packet: Dict[str, Any]) ->
 
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            response = await client.post(f"{base_url}/udap/onboarding", json=connection_packet)
+            response = await client.post(
+                f"{base_url}/udap/onboarding", json=connection_packet
+            )
 
         if response.status_code == 202:
             data = response.json()
             return {
-                'success': True,
-                'onboarding_id': data.get('onboarding_id'),
-                'status': data.get('status', 'pending-verification'),
-                'retry_after': response.headers.get('Retry-After'),
+                "success": True,
+                "onboarding_id": data.get("onboarding_id"),
+                "status": data.get("status", "pending-verification"),
+                "retry_after": response.headers.get("Retry-After"),
             }
         else:
-            return {'success': False, 'error': f"API error: {response.status_code}"}
+            return {"success": False, "error": f"API error: {response.status_code}"}
     except Exception as e:
         logger.error(f"Error submitting onboarding request: {e}")
-        return {'success': False, 'error': str(e)}
+        return {"success": False, "error": str(e)}
 
 
 async def poll_onboarding(base_url: str, onboarding_id: str) -> Dict[str, Any]:
@@ -72,18 +77,29 @@ async def poll_onboarding(base_url: str, onboarding_id: str) -> Dict[str, Any]:
 
         if response.status_code == 202:
             data = response.json()
-            return {'success': True, 'terminal': False, 'status': data.get('status', 'in-review')}
+            return {
+                "success": True,
+                "terminal": False,
+                "status": data.get("status", "in-review"),
+            }
         elif response.status_code == 200:
             data = response.json()
-            return {'success': True, 'terminal': True, 'status': data.get('status', 'approved'), 'data': data}
+            return {
+                "success": True,
+                "terminal": True,
+                "status": data.get("status", "approved"),
+                "data": data,
+            }
         else:
-            return {'success': False, 'error': f"API error: {response.status_code}"}
+            return {"success": False, "error": f"API error: {response.status_code}"}
     except Exception as e:
         logger.error(f"Error polling onboarding status: {e}")
-        return {'success': False, 'error': str(e)}
+        return {"success": False, "error": str(e)}
 
 
-async def register_dynamic_client(base_url: str, approved_purpose_grant: Dict[str, Any]) -> Dict[str, Any]:
+async def register_dynamic_client(
+    base_url: str, approved_purpose_grant: Dict[str, Any]
+) -> Dict[str, Any]:
     """
     POST {base_url}/register -- standard UDAP Dynamic Client Registration.
 
@@ -95,17 +111,19 @@ async def register_dynamic_client(base_url: str, approved_purpose_grant: Dict[st
 
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            response = await client.post(f"{base_url}/register", json=approved_purpose_grant)
+            response = await client.post(
+                f"{base_url}/register", json=approved_purpose_grant
+            )
 
         if response.status_code == 201:
             data = response.json()
             return {
-                'success': True,
-                'client_id': data.get('client_id'),
-                'scopes': data.get('scope', data.get('scopes')),
+                "success": True,
+                "client_id": data.get("client_id"),
+                "scopes": data.get("scope", data.get("scopes")),
             }
         else:
-            return {'success': False, 'error': f"API error: {response.status_code}"}
+            return {"success": False, "error": f"API error: {response.status_code}"}
     except Exception as e:
         logger.error(f"Error registering dynamic client: {e}")
-        return {'success': False, 'error': str(e)}
+        return {"success": False, "error": str(e)}

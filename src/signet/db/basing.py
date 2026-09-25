@@ -6,6 +6,7 @@ Signet-specific dataclasses and database (SignetBaser). Fully independent of
 locksmith core's healthKERI connections store -- signet owns its own
 list/state entirely.
 """
+
 from dataclasses import dataclass, field
 
 from keri import help
@@ -39,6 +40,7 @@ class SignetBaser(dbing.LMDBer):
     Kept separate from locksmith core's LMDB so signet's Connection model
     does not share storage with the existing healthKERI connections UI.
     """
+
     TailDirPath = "keri/signet"
     AltTailDirPath = ".keri/signet"
     TempPrefix = "rt"
@@ -46,14 +48,16 @@ class SignetBaser(dbing.LMDBer):
     def __init__(self, name="signet", headDirPath=None, reopen=True, **kwa):
         self.signet_connections = None
 
-        super(SignetBaser, self).__init__(name=name, headDirPath=headDirPath, reopen=reopen, **kwa)
+        super(SignetBaser, self).__init__(
+            name=name, headDirPath=headDirPath, reopen=reopen, **kwa
+        )
 
     def reopen(self, readonly=False, **kwa):
         super(SignetBaser, self).reopen(readonly, **kwa)
 
         self.signet_connections = koming.Komer(
             db=self,
-            subkey='conn.',
+            subkey="conn.",
             schema=SignetConnection,
         )
 
