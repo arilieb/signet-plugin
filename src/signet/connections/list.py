@@ -77,7 +77,7 @@ class ConnectionsListPage(LocksmithFormPage):
         return self.app.vault.plugin_state.get("signet", {}).get("db")
 
     def _get_row_actions(
-            self, row_data: dict[str, Any]
+        self, row_data: dict[str, Any]
     ) -> tuple[list[str], dict[str, str]]:
         """Determine which row action to show based on connection status."""
         status = row_data.get("_status", "")
@@ -138,7 +138,9 @@ class ConnectionsListPage(LocksmithFormPage):
     @guarded("Failed to add connection.")
     def _on_add_connection(self):
         """Handle Add Connection click."""
-        dialog = AddConnectionDialog(app=self.app, on_success=self._load_connections, parent=self)
+        dialog = AddConnectionDialog(
+            app=self.app, on_success=self._load_connections, parent=self
+        )
         dialog.open()
 
     @guarded("Failed to perform the requested action.")

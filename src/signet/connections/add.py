@@ -79,7 +79,7 @@ class AddConnectionDialog(LocksmithDialog):
             title_icon=":/assets/material-icons/p2p.svg",
             content=content_widget,
             buttons=button_row,
-            show_overlay=False
+            show_overlay=False,
         )
 
         self.setFixedWidth(480)
@@ -113,7 +113,9 @@ class AddConnectionDialog(LocksmithDialog):
             connection_id = partner["connection_id"]
             self._partner_by_id[connection_id] = partner
             card = self._build_partner_card(partner)
-            self.partner_selector.add_option(connection_id, partner["display_name"], card)
+            self.partner_selector.add_option(
+                connection_id, partner["display_name"], card
+            )
 
         if not self._partner_by_id:
             self.partner_selector.setEnabled(False)
@@ -142,7 +144,7 @@ class AddConnectionDialog(LocksmithDialog):
         icon = QIcon(partner.get("logo_icon_path", ""))
         icon_label.setPixmap(icon.pixmap(32, 32))
         icon_label.setFixedSize(32, 32)
-        icon_label.setStyleSheet(f"border: none;")
+        icon_label.setStyleSheet("border: none;")
 
         layout.addWidget(icon_label)
 
@@ -151,12 +153,16 @@ class AddConnectionDialog(LocksmithDialog):
         text_layout.setSpacing(4)
 
         name_label = QLabel(partner["display_name"])
-        name_label.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {colors.TEXT_PRIMARY}; border: none;")
+        name_label.setStyleSheet(
+            f"font-size: 14px; font-weight: bold; color: {colors.TEXT_PRIMARY}; border: none;"
+        )
         text_layout.addWidget(name_label)
 
         url_label = QLabel(partner.get("base_url", ""))
         url_label.setWordWrap(True)
-        url_label.setStyleSheet(f"font-size: 12px; color: {colors.TEXT_SUBTLE}; border: none;")
+        url_label.setStyleSheet(
+            f"font-size: 12px; color: {colors.TEXT_SUBTLE}; border: none;"
+        )
         text_layout.addWidget(url_label)
 
         layout.addLayout(text_layout)
