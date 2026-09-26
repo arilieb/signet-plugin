@@ -77,7 +77,7 @@ class ConnectionsListPage(LocksmithFormPage):
         return self.app.vault.plugin_state.get("signet", {}).get("db")
 
     def _get_row_actions(
-        self, row_data: dict[str, Any]
+            self, row_data: dict[str, Any]
     ) -> tuple[list[str], dict[str, str]]:
         """Determine which row action to show based on connection status."""
         status = row_data.get("_status", "")
@@ -138,10 +138,8 @@ class ConnectionsListPage(LocksmithFormPage):
     @guarded("Failed to add connection.")
     def _on_add_connection(self):
         """Handle Add Connection click."""
-        dialog = AddConnectionDialog(
-            app=self.app, on_success=self._load_connections, parent=self
-        )
-        dialog.show()
+        dialog = AddConnectionDialog(app=self.app, on_success=self._load_connections, parent=self)
+        dialog.open()
 
     @guarded("Failed to perform the requested action.")
     def _on_row_clicked(self, row_data: Any):
@@ -157,7 +155,7 @@ class ConnectionsListPage(LocksmithFormPage):
             on_success=self._load_connections,
             parent=self,
         )
-        dialog.show()
+        dialog.open()
 
     @guarded("Failed to perform the requested action.")
     def _on_row_action_signal(self, row_data: dict[str, Any], action: str):
@@ -173,7 +171,7 @@ class ConnectionsListPage(LocksmithFormPage):
                 on_success=self._load_connections,
                 parent=self,
             )
-            dialog.show()
+            dialog.open()
         elif action == "View":
             dialog = ViewConnectionDialog(
                 app=self.app,
@@ -181,7 +179,7 @@ class ConnectionsListPage(LocksmithFormPage):
                 on_success=self._load_connections,
                 parent=self,
             )
-            dialog.show()
+            dialog.open()
         elif action == "Delete":
             self._on_delete_connection(row_data)
         else:
@@ -252,7 +250,7 @@ class ConnectionsListPage(LocksmithFormPage):
                 on_success=self._load_connections,
                 parent=self,
             )
-            dialog.show()
+            dialog.open()
 
     def on_show(self):
         """Called when page becomes visible - load connections."""

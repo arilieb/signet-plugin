@@ -11,9 +11,11 @@ in mock_data minus whichever partners already have a SignetConnection.
 """
 
 from collections.abc import Callable
+from typing import Hashable
 
 import qasync
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 from keri import help
 from keri.help import helping
 
@@ -22,6 +24,7 @@ from locksmith.ui.toolkit.widgets import (
     LocksmithButton,
     LocksmithDialog,
     LocksmithInvertedButton,
+    SelectionRevealSection,
 )
 from locksmith.ui.toolkit.widgets.fields import FloatingLabelComboBox
 
@@ -37,8 +40,9 @@ class AddConnectionDialog(LocksmithDialog):
     def __init__(self, app, on_success: Callable[[], None] | None = None, parent=None):
         self.app = app
         self.on_success = on_success
-        self._partner_by_display: dict[str, dict] = {}
+        self._partner_by_id: dict[str, dict] = {}
         self._credential_by_display: dict[str, dict] = {}
+        self._credential_selectors: dict[str, FloatingLabelComboBox] = {}
         self._is_submitting = False
 
         content_widget = QWidget()
@@ -51,26 +55,12 @@ class AddConnectionDialog(LocksmithDialog):
         desc.setStyleSheet(f"font-size: 14px; color: {colors.TEXT_SUBTLE};")
         content_layout.addWidget(desc)
 
-        self.partner_selector = FloatingLabelComboBox(label_text="Select a connection")
+        self.partner_selector = SelectionRevealSection(
+            label_text="Select a connection",
+            on_selection_changed=self._on_partner_selected,
+        )
         self.partner_selector.setFixedWidth(420)
         content_layout.addWidget(self.partner_selector)
-
-        self.detail_section = QWidget()
-        detail_layout = QVBoxLayout(self.detail_section)
-        detail_layout.setContentsMargins(0, 10, 0, 0)
-        detail_layout.setSpacing(10)
-
-        self.url_label = QLabel("")
-        self.url_label.setStyleSheet(f"font-size: 13px; color: {colors.TEXT_SUBTLE};")
-        self.url_label.setWordWrap(True)
-        detail_layout.addWidget(self.url_label)
-
-        self.credential_selector = FloatingLabelComboBox(label_text="Select Credential")
-        self.credential_selector.setFixedWidth(420)
-        detail_layout.addWidget(self.credential_selector)
-
-        self.detail_section.setVisible(False)
-        content_layout.addWidget(self.detail_section)
 
         content_layout.addStretch()
 
@@ -89,13 +79,14 @@ class AddConnectionDialog(LocksmithDialog):
             title_icon=":/assets/material-icons/p2p.svg",
             content=content_widget,
             buttons=button_row,
+            show_overlay=False
         )
 
-        self.setFixedSize(480, 420)
+        self.setFixedWidth(480)
 
         self.cancel_btn.clicked.connect(self.close)
         self.submit_btn.clicked.connect(self._on_submit)
-        self.partner_selector.currentIndexChanged.connect(self._on_partner_selected)
+        self.register_selection_section(self.partner_selector)
 
         self._populate_partner_dropdown()
 
@@ -113,54 +104,99 @@ class AddConnectionDialog(LocksmithDialog):
                 for connection_id, _ in db.signet_connections.getItemIter()
             }
 
-        self.partner_selector.clear()
-        self._partner_by_display.clear()
+        self.partner_selector.clear_options()
+        self._partner_by_id.clear()
 
         for partner in mock_data.DISCOVERABLE_CONNECTIONS:
             if partner["connection_id"] in existing_ids:
                 continue
-            display = partner["display_name"]
-            self._partner_by_display[display] = partner
-            self.partner_selector.addItem(display)
+            connection_id = partner["connection_id"]
+            self._partner_by_id[connection_id] = partner
+            card = self._build_partner_card(partner)
+            self.partner_selector.add_option(connection_id, partner["display_name"], card)
 
-        if not self._partner_by_display:
+        if not self._partner_by_id:
             self.partner_selector.setEnabled(False)
 
-    def _on_partner_selected(self, _index: int):
-        display = self.partner_selector.currentText()
-        partner = self._partner_by_display.get(display)
+    def _build_partner_card(self, partner: dict) -> QWidget:
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 10, 0, 0)
+        page_layout.setSpacing(10)
 
-        if partner is None:
-            self.detail_section.setVisible(False)
+        card = QFrame()
+        card.setFixedWidth(420)
+        card.setStyleSheet(f"""
+            QFrame {{
+                background-color: {colors.BACKGROUND_CONTENT};
+                border: 1px solid {colors.BORDER_NEUTRAL};
+                border-radius: 8px;
+            }}
+        """)
+
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        icon_label = QLabel()
+        icon = QIcon(partner.get("logo_icon_path", ""))
+        icon_label.setPixmap(icon.pixmap(32, 32))
+        icon_label.setFixedSize(32, 32)
+        icon_label.setStyleSheet(f"border: none;")
+
+        layout.addWidget(icon_label)
+
+        text_layout = QVBoxLayout()
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(4)
+
+        name_label = QLabel(partner["display_name"])
+        name_label.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {colors.TEXT_PRIMARY}; border: none;")
+        text_layout.addWidget(name_label)
+
+        url_label = QLabel(partner.get("base_url", ""))
+        url_label.setWordWrap(True)
+        url_label.setStyleSheet(f"font-size: 12px; color: {colors.TEXT_SUBTLE}; border: none;")
+        text_layout.addWidget(url_label)
+
+        layout.addLayout(text_layout)
+
+        page_layout.addWidget(card)
+
+        credential_selector = FloatingLabelComboBox(label_text="Select Credential")
+        credential_selector.setFixedWidth(420)
+        page_layout.addWidget(credential_selector)
+        self._credential_selectors[partner["connection_id"]] = credential_selector
+        self._populate_credential_dropdown(credential_selector)
+
+        page.adjustSize()
+        return page
+
+    def _on_partner_selected(self, key: Hashable):
+        if key is SelectionRevealSection.NONE_KEY:
             self.submit_btn.setEnabled(False)
             return
-
-        self.url_label.setText(f"URL: {partner['base_url']}")
-        self._populate_credential_dropdown()
-        self.detail_section.setVisible(True)
         self.submit_btn.setEnabled(True)
 
-    def _populate_credential_dropdown(self):
-        self.credential_selector.clear()
-        self._credential_by_display.clear()
-
+    def _populate_credential_dropdown(self, selector: FloatingLabelComboBox):
         vault = self.app.vault if self.app else None
         for credential in credentials.filter_legal_entity_subunit_credentials(vault):
             display = credential.get("title") or credential.get("said", "Credential")
             self._credential_by_display[display] = credential
-            self.credential_selector.addItem(display)
+            selector.addItem(display)
 
     def _on_submit(self):
         if self._is_submitting:
             return
 
-        display = self.partner_selector.currentText()
-        partner = self._partner_by_display.get(display)
+        connection_id = self.partner_selector.currentData()
+        partner = self._partner_by_id.get(connection_id)
         if partner is None:
             self.show_error("Select a connection to add.")
             return
 
-        credential_display = self.credential_selector.currentText()
+        selector = self._credential_selectors.get(connection_id)
+        credential_display = selector.currentText() if selector else ""
         credential = self._credential_by_display.get(credential_display)
         if credential is None:
             self.show_error("Select a credential to present.")
