@@ -15,7 +15,7 @@ STATUS_DISPLAY = {
     "registered": ("Registered", colors.SUCCESS_INDICATOR),
 }
 
-_ROW_ACTION_ICONS = {
+ROW_ACTION_ICONS = {
     "Refresh": ":/assets/material-icons/refresh.svg",
     "Register": ":/assets/material-icons/shield_lock.svg",
     "Delete": ":/assets/material-icons/delete.svg",
