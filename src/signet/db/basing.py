@@ -32,6 +32,17 @@ class SignetConnection:
     client_id: str = ""  # Populated post-DCR
     created_at: str = field(default_factory=helping.nowIso8601)
     last_checked_at: str = ""
+    # Onboarding state added with the signed-packet flow. Every field is
+    # defaulted so connections pinned before these existed still deserialize.
+    hab_name: str = ""  # Local identifier that signed and presented
+    hab_aid: str = ""
+    correlation_id: str = ""
+    server_aid: str = ""
+    poll_url: str = ""  # Absolute URL from Content-Location
+    retry_after: str = ""
+    purpose_status: str = ""  # Server-side status: in-review, approved, ...
+    decision_provenance: dict = field(default_factory=dict)
+    last_error: str = ""
 
 
 class SignetBaser(dbing.LMDBer):

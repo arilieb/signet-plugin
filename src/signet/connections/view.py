@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from keri import help
-from keri.help import helping
 
 from locksmith.ui import colors
 from locksmith.ui.toolkit.widgets import (
@@ -29,7 +28,7 @@ from locksmith.ui.toolkit.widgets import (
     LocksmithInvertedButton,
 )
 
-from ..core import remoting
+from . import refresh
 from .status import STATUS_DISPLAY
 
 logger = help.ogler.getLogger(__name__)
@@ -203,19 +202,12 @@ class ViewConnectionDialog(LocksmithDialog):
         self.action_btn.setText("Refreshing...")
 
         previous_status = connection.status
-        result = await remoting.poll_onboarding(
-            connection.base_url, connection.onboarding_id
-        )
+        result = await refresh.refresh_connection(db, connection)
         if not result.get("success"):
             self.show_error(result.get("error", "Failed to refresh connection status."))
             self.action_btn.setEnabled(True)
             self.action_btn.setText("Refresh")
             return
-
-        connection.last_checked_at = helping.nowIso8601()
-        if result.get("terminal"):
-            connection.status = result.get("status", connection.status)
-        db.signet_connections.pin(keys=(self.connection_id,), val=connection)
 
         self._build_content()
 
