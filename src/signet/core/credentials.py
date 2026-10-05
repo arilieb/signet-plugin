@@ -2,15 +2,11 @@
 """
 signet.core.credentials module
 
-Filters the vault's received credentials down to the "legal entity subunit
-role" credential presented when submitting a UDAP vLEI onboarding request.
+Filters the vault's received credentials down to the ECR (Engagement Context
+Role) credentials presented when submitting a UDAP vLEI onboarding request.
 
-Flagging explicitly: neither UDAP_vLEI_Onboarding_Intake_Design.md nor its
-sibling DCR/auth docs use the phrase "legal entity subunit role" -- it only
-appears in the planning note this task was scoped from. The real vLEI chain
-in this codebase (acdc-auth-server/schema/sample-vlei-graph/) has qvi,
-legal-entity, ecr, and ecr-auth schemas but nothing named "subunit".
-LEGAL_ENTITY_SUBUNIT_SCHEMA_SAID is a placeholder pending the real schema.
+The chain is GLEIF External -> QVI -> LE -> ECR Auth -> ECR (ONBOARDING.md
+S4.6; design doc S5 recommends an ECR as the submitter credential).
 """
 
 from typing import Any
@@ -21,20 +17,22 @@ from .configing import is_mock_mode
 
 logger = help.ogler.getLogger(__name__)
 
-LEGAL_ENTITY_SUBUNIT_SCHEMA_SAID = "TBD"
+LEGAL_ENTITY_SCHEMA_SAID = "ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY"
+ECR_SCHEMA_SAID = "EEy9PkikFcANV1l7EHukCeXqrzT1hNZjGlUk7wuMO5jw"
 
 # Seeded so the "Select Credential" dropdown in AddConnectionDialog isn't
-# empty in dev, since no vault will actually hold a credential against the
-# placeholder schema SAID above until the real schema exists.
+# empty in mock mode (never in live dev, which must use real credentials).
 _MOCK_CREDENTIAL = {
-    "said": "ELegalEntitySubunitPlaceholder00000000000",
-    "title": "Legal Entity Subunit Role (placeholder)",
-    "schema_said": LEGAL_ENTITY_SUBUNIT_SCHEMA_SAID,
+    "said": "EEngagementContextRolePlaceholder0000000",
+    "title": "Engagement Context Role (placeholder)",
+    "holder_pre": "",
+    "role": "Staff System Engineer",
+    "schema_said": ECR_SCHEMA_SAID,
 }
 
 
-def filter_legal_entity_subunit_credentials(vault) -> list[dict[str, Any]]:
-    """Return the vault's received credentials matching the legal entity subunit schema."""
+def filter_ecr_credentials(vault) -> list[dict[str, Any]]:
+    """Return the vault's received credentials matching the ECR schema."""
     matching: list[dict[str, Any]] = []
 
     if vault is not None and getattr(vault, "hby", None) is not None:
@@ -43,13 +41,17 @@ def filter_legal_entity_subunit_credentials(vault) -> list[dict[str, Any]]:
             saids.extend(vault.rgy.reger.subjs.get(keys=(pre,)))
 
         for credential in vault.rgy.reger.cloneCreds(saids, vault.hby.db):
-            schemer = credential.get("schema")
-            if schemer is None or schemer.said != LEGAL_ENTITY_SUBUNIT_SCHEMA_SAID:
+            schema = credential.get("schema") or {}  # schemer.sed: the schema dict
+            if schema.get("$id") != ECR_SCHEMA_SAID:
                 continue
+            sad = credential.get("sad", {})
+            attrib = sad.get("a", {})
             matching.append(
                 {
-                    "said": credential.get("sad", {}).get("d", ""),
-                    "title": schemer.sed.get("title", ""),
+                    "said": sad.get("d", ""),
+                    "title": schema.get("title", ""),
+                    "holder_pre": attrib.get("i", ""),
+                    "role": attrib.get("engagementContextRole", ""),
                 }
             )
 

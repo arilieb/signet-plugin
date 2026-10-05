@@ -11,6 +11,7 @@ import uuid
 from typing import Any, Dict
 
 from ..db.basing import SignetConnection
+from . import configing
 
 ONYX_BASE_URL = "https://onyx.example.com"
 CAMBIA_BASE_URL = "https://cambia.example.com"
@@ -50,6 +51,15 @@ DISCOVERABLE_CONNECTIONS: list[Dict[str, Any]] = [
 # row-action/view-dialog "Refresh") -- letting the list show it red first,
 # per the design doc's async approval flow.
 _POLLED_ONCE: set = set()
+
+
+def mock_discover_server(base_url: str) -> Dict[str, Any]:
+    """Canned /.well-known/udap onboarding discovery."""
+    return {
+        "success": True,
+        "onboarding_endpoint": f"{base_url}/udap/onboarding",
+        "aid": "EMockServerAid0000000000000000000000000000000",
+    }
 
 
 def mock_submit_onboarding(connection_packet: Dict[str, Any]) -> Dict[str, Any]:
@@ -97,6 +107,23 @@ def mock_register_dynamic_client(
         "client_id": f"client-{uuid.uuid4().hex[:12]}",
         "scopes": approved_purpose_grant.get("scope", "system/Patient.read"),
     }
+
+
+def discoverable_connections() -> list[Dict[str, Any]]:
+    """Partners offered by AddConnectionDialog: fixtures in mock mode, the local Echelon in live dev."""
+    if configing.is_live_dev():
+        return [
+            {
+                "connection_id": "local-echelon",
+                "display_name": "Local Echelon",
+                "logo_icon_path": ":/assets/material-icons/identity_platform.svg",
+                "base_url": configing.partner_url(),
+                "purpose": "TREAT",
+            }
+        ]
+    if configing.is_mock_mode():
+        return DISCOVERABLE_CONNECTIONS
+    return []
 
 
 def seed_connections() -> list[SignetConnection]:

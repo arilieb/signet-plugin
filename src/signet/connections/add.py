@@ -17,7 +17,6 @@ import qasync
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 from keri import help
-from keri.help import helping
 
 from locksmith.ui import colors
 from locksmith.ui.toolkit.widgets import (
@@ -28,8 +27,9 @@ from locksmith.ui.toolkit.widgets import (
 )
 from locksmith.ui.toolkit.widgets.fields import FloatingLabelComboBox
 
-from ..core import credentials, mock_data, remoting
+from ..core import configing, credentials, devbootstrap, mock_data, presenting, remoting
 from ..db.basing import SignetConnection
+from . import refresh
 
 logger = help.ogler.getLogger(__name__)
 
@@ -107,7 +107,7 @@ class AddConnectionDialog(LocksmithDialog):
         self.partner_selector.clear_options()
         self._partner_by_id.clear()
 
-        for partner in mock_data.DISCOVERABLE_CONNECTIONS:
+        for partner in mock_data.discoverable_connections():
             if partner["connection_id"] in existing_ids:
                 continue
             connection_id = partner["connection_id"]
@@ -186,7 +186,9 @@ class AddConnectionDialog(LocksmithDialog):
 
     def _populate_credential_dropdown(self, selector: FloatingLabelComboBox):
         vault = self.app.vault if self.app else None
-        for credential in credentials.filter_legal_entity_subunit_credentials(vault):
+        if vault is not None and configing.is_live_dev():
+            devbootstrap.admit_pending_grants(vault)
+        for credential in credentials.filter_ecr_credentials(vault):
             display = credential.get("title") or credential.get("said", "Credential")
             self._credential_by_display[display] = credential
             selector.addItem(display)
@@ -223,44 +225,59 @@ class AddConnectionDialog(LocksmithDialog):
             return
 
         try:
-            connection_packet = {
-                "display_name": partner["display_name"],
-                "purpose": partner.get("purpose", ""),
-                "credential_said": credential.get("said", ""),
-            }
+            vault = self.app.vault
+            base_url = partner["base_url"]
 
-            submit_result = await remoting.submit_onboarding(
-                partner["base_url"], connection_packet
+            discovery = await remoting.discover_server(base_url)
+            if not discovery.get("success"):
+                self.show_error(discovery.get("error", "Failed to reach the server."))
+                return
+
+            try:
+                request = presenting.build_onboarding_request(
+                    vault,
+                    credential,
+                    endpoint=discovery["onboarding_endpoint"],
+                    server_aid=discovery["aid"],
+                )
+            except presenting.PresentingError as exc:
+                self.show_error(str(exc))
+                return
+
+            result = await remoting.submit_onboarding(
+                base_url, request.url, request.body, request.headers
             )
-            if not submit_result.get("success"):
+            if not result.get("success"):
                 self.show_error(
-                    submit_result.get("error", "Failed to submit onboarding request.")
+                    result.get("error", "Failed to submit onboarding request.")
                 )
                 return
 
-            onboarding_id = submit_result.get("onboarding_id", "")
-            status = submit_result.get("status", "needs_approval")
-
-            # Per the design doc's idempotency semantics, immediately follow
-            # the submission with one poll to catch an already-approved
+            # Per the design doc's idempotency semantics, a pending submission
+            # is immediately followed by one poll to catch an already-approved
             # decision.
-            poll_result = await remoting.poll_onboarding(
-                partner["base_url"], onboarding_id
-            )
-            if poll_result.get("success") and poll_result.get("terminal"):
-                status = poll_result.get("status", status)
+            if not result.get("terminal"):
+                poll_result = await remoting.poll_onboarding(
+                    base_url,
+                    result.get("onboarding_id", ""),
+                    result.get("poll_url", ""),
+                )
+                if poll_result.get("success") and poll_result.get("terminal"):
+                    result = {**result, **poll_result}
 
             connection = SignetConnection(
                 connection_id=partner["connection_id"],
                 display_name=partner["display_name"],
                 logo_icon_path=partner.get("logo_icon_path", ""),
-                base_url=partner["base_url"],
-                status=self._normalize_status(status),
-                onboarding_id=onboarding_id,
+                base_url=base_url,
                 purpose=partner.get("purpose", ""),
                 selected_credential_said=credential.get("said", ""),
-                last_checked_at=helping.nowIso8601(),
+                hab_name=request.hab_name,
+                hab_aid=request.hab_aid,
+                server_aid=request.server_aid,
+                correlation_id=request.correlation_id,
             )
+            refresh.apply_result(connection, result)
             db.signet_connections.pin(keys=(connection.connection_id,), val=connection)
 
             logger.info(
@@ -279,15 +296,6 @@ class AddConnectionDialog(LocksmithDialog):
             self.show_error(f"Failed to add connection: {exc}")
         finally:
             self._reset_submit_button()
-
-    @staticmethod
-    def _normalize_status(status: str) -> str:
-        """Map onboarding-doc status strings onto the 4-bucket SignetConnection.status."""
-        if status == "approved":
-            return "approved"
-        if status == "rejected":
-            return "rejected"
-        return "needs_approval"
 
     def _reset_submit_button(self):
         self._is_submitting = False

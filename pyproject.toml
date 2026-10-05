@@ -30,6 +30,11 @@ dependencies = [
     "httpx==0.28.1"
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+]
 
 [project.entry-points."locksmith.plugins"]
 signet = "signet.plugin:SignetPlugin"
@@ -44,3 +49,4 @@ include = ["*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]
+asyncio_mode = "auto"

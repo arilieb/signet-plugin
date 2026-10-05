@@ -167,3 +167,7 @@ cython_debug/
 
 # proxy stuff
 *.pem
+# dev-live generated output
+scripts/dev-live/generated/
+scripts/dev-live/server.config.yaml
+scripts/dev-live/server.config.review.yaml

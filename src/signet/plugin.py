@@ -20,7 +20,7 @@ from locksmith.ui.toolkit.widgets.buttons import BackButton
 from locksmith.ui.vault.menu import MenuButton, MenuSpacer
 
 from .connections.list import ConnectionsListPage
-from .core import mock_data
+from .core import configing, devbootstrap, mock_data
 from .db.basing import SignetBaser
 
 logger = help.ogler.getLogger(__name__)
@@ -117,11 +117,14 @@ class SignetPlugin(PluginBase):
         self._db = SignetBaser(name=vault.hby.name, reopen=True)
         vault.plugin_state["signet"] = {"db": self._db}
 
-        if next(self._db.signet_connections.getItemIter(), None) is None:
-            for connection in mock_data.seed_connections():
-                self._db.signet_connections.pin(
-                    keys=(connection.connection_id,), val=connection
-                )
+        if configing.is_mock_mode():
+            if next(self._db.signet_connections.getItemIter(), None) is None:
+                for connection in mock_data.seed_connections():
+                    self._db.signet_connections.pin(
+                        keys=(connection.connection_id,), val=connection
+                    )
+        elif configing.is_live_dev():
+            devbootstrap.bootstrap(vault)
 
     def on_vault_closed(self, vault) -> None:
         vault.plugin_state.pop("signet", None)

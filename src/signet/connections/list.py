@@ -13,13 +13,12 @@ from typing import Any
 
 import qasync
 from keri import help
-from keri.help import helping
 
 from locksmith.ui import colors
 from locksmith.ui.toolkit.tables import PaginatedTableWidget
 from locksmith.ui.toolkit.widgets.page import LocksmithFormPage, guarded
 
-from ..core import remoting
+from . import refresh
 from .add import AddConnectionDialog
 from .dcr_gate import DynamicClientRegistrationGateDialog
 from .status import ROW_ACTION_ICONS as _ROW_ACTION_ICONS
@@ -229,17 +228,10 @@ class ConnectionsListPage(LocksmithFormPage):
             return
 
         previous_status = connection.status
-        result = await remoting.poll_onboarding(
-            connection.base_url, connection.onboarding_id
-        )
+        result = await refresh.refresh_connection(db, connection)
         if not result.get("success"):
             self.show_error(result.get("error", "Failed to refresh connection status."))
             return
-
-        connection.last_checked_at = helping.nowIso8601()
-        if result.get("terminal"):
-            connection.status = result.get("status", connection.status)
-        db.signet_connections.pin(keys=(connection_id,), val=connection)
 
         self._load_connections()
 
