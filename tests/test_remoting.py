@@ -139,7 +139,12 @@ async def test_register_created(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "code,err", [(400, "invalid_redirect_uri"), (403, "access_denied"), (503, "temporarily_unavailable")]
+    "code,err",
+    [
+        (400, "invalid_redirect_uri"),
+        (403, "access_denied"),
+        (503, "temporarily_unavailable"),
+    ],
 )
 async def test_register_error_keeps_correlation_id(monkeypatch, code, err):
     _patch(

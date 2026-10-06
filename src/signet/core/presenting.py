@@ -142,7 +142,9 @@ def build_dcr_request(
     embeds = _grant_embeds(vault, connection.selected_credential_said)
     udap = {"purpose": connection.purpose or REQUESTED_PURPOSE}
     client_name = client_name or connection.client_name
-    redirect_uris = redirect_uris if redirect_uris is not None else connection.redirect_uris
+    redirect_uris = (
+        redirect_uris if redirect_uris is not None else connection.redirect_uris
+    )
     if client_name:
         udap["client_name"] = client_name
     if redirect_uris:

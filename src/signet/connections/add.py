@@ -224,7 +224,9 @@ class AddConnectionDialog(LocksmithDialog):
         redirect_input = self._redirect_inputs.get(connection_id)
         redirect_uris = [
             line.strip()
-            for line in (redirect_input.toPlainText() if redirect_input else "").splitlines()
+            for line in (
+                redirect_input.toPlainText() if redirect_input else ""
+            ).splitlines()
             if line.strip()
         ]
 

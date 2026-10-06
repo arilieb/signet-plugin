@@ -102,7 +102,9 @@ def test_build_request_packet_shape(monkeypatch, hab):
     monkeypatch.setattr(
         presenting,
         "build_oobis",
-        lambda h, said, le=None: [{"type": "aid", "aid": h.pre, "url": "http://w/oobi"}],
+        lambda h, said, le=None: [
+            {"type": "aid", "aid": h.pre, "url": "http://w/oobi"}
+        ],
     )
 
     class Vault:
@@ -142,7 +144,6 @@ def _dcr_connection(hab, **kw):
 
 
 def test_build_dcr_request_shape(hab):
-    import time
 
     from keri.core import serdering
     from keri.help import helping
