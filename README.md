@@ -96,13 +96,17 @@ cd ~/healthkeri/echelon-server && echelons serve --host 127.0.0.1 --port 8000 \
 
 `issue-chain.sh` prints the QVI AID and the exact commands for steps 5-6.
 
-In the UI: Connections -> Add -> "Local Echelon" -> pick the ECR credential -> submit; use Refresh to poll.
+In the UI: Connections -> Add -> "Local Echelon" -> pick the ECR credential, enter the redirect URIs (one per line, e.g. `http://127.0.0.1:9000/cb`) -> submit; use Refresh to poll. The redirect URIs are approved with onboarding.
+
+Once the connection is approved (green), the DCR gate offers "Proceed": signet builds an IPEX grant exn carrying `a.udap` (purpose, client_name, redirect_uris), POSTs it to `/register`, and shows the returned `client_id` (201; repeating it returns the same client). Failures show the RFC 7591 error and `correlation_id`.
 
 ### Manual checks
 
 ```
 curl -s http://127.0.0.1:8000/.well-known/udap
 curl -s http://127.0.0.1:8000/udap/onboarding/<onboarding_id>
+# after DCR: 403 access_denied with no approved record (review config), 400 invalid_redirect_uri for a URI outside the approved set
+curl -s -X POST http://127.0.0.1:8000/register -H 'content-type: application/json' -d '{"software_statement_type":"x","software_statement":"x","udap":"1"}'   # 400 invalid_software_statement
 curl -s "http://127.0.0.1:8080/credential/<ECR_SAID>?chains=true&tel=true&registry=true" | head -c 300
 # witness holds the holder KEL (key-state refresh path); header value is a witness AID
 curl -H "CESR-DESTINATION: BBilc4-L3tFUnfM_wJr4S4OJanAv_VmF_dJNN6vkf2Ha" \
@@ -121,4 +125,4 @@ curl -H "CESR-DESTINATION: BBilc4-L3tFUnfM_wJr4S4OJanAv_VmF_dJNN6vkf2Ha" \
 - **Grants not appearing in Locksmith**: grants are admitted by a background doer every ~2s once the issuer OOBIs (`SIGNET_DEV_OOBIS`) have resolved; also each time the Add Connection dialog loads.
 - **No credential in the dropdown**: the ECR must be admitted in the vault, which needs the QVI, LE and ECR Auth grants admitted first.
 
-DCR (`/register`) is not implemented on either side yet; it follows a successful live onboarding test.
+With `server.config.review.yaml` (empty whitelist) the gate is never offered while pending; a DCR sent without an approved record returns 403 `access_denied`.

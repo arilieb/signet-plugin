@@ -123,3 +123,85 @@ def test_build_request_packet_shape(monkeypatch, hab):
     assert req.headers["Digest"] == presenting.body_digest(req.body)
     assert req.headers["Signify-Resource"] == hab.pre
     assert req.hab_name == "holder"
+
+
+def _dcr_connection(hab, **kw):
+    from signet.db.basing import SignetConnection
+
+    return SignetConnection(
+        connection_id="c1",
+        hab_aid=hab.pre,
+        hab_name=hab.name,
+        server_aid="Esrv",
+        selected_credential_said="ECRED",
+        purpose="TREAT",
+        client_name="Onyx",
+        redirect_uris=["http://127.0.0.1:9000/cb"],
+        **kw,
+    )
+
+
+def test_build_dcr_request_shape(hab):
+    import time
+
+    from keri.core import serdering
+    from keri.help import helping
+
+    class Vault:
+        hby = hab._test_hby
+
+    from keri.core import coring
+
+    sad = {"v": "ACDC10JSON000000_", "d": "", "i": hab.pre, "s": "Eschema"}
+    _, sad = coring.Saider.saidify(sad=sad, kind="JSON", label="d")
+    acdc = coring.Sadder(ked=sad, kind="JSON").raw
+    said = sad["d"]
+    presenting._grant_embeds_orig = presenting._grant_embeds
+    presenting._grant_embeds = lambda vault, said: {"acdc": acdc}
+    try:
+        before = helping.nowUTC()
+        body = presenting.build_dcr_request(Vault, _dcr_connection(hab))
+    finally:
+        presenting._grant_embeds = presenting._grant_embeds_orig
+
+    assert body["software_statement_type"] == presenting.DCR_STATEMENT_TYPE
+    assert body["udap"] == "1"
+    exn = serdering.SerderKERI(raw=body["software_statement"].encode())
+    assert exn.ked["r"] == "/ipex/grant"
+    assert exn.ked["i"] == hab.pre
+    assert exn.ked["a"]["i"] == "Esrv"
+    assert exn.ked["a"]["udap"] == {
+        "purpose": "TREAT",
+        "client_name": "Onyx",
+        "redirect_uris": ["http://127.0.0.1:9000/cb"],
+    }
+    assert exn.ked["e"]["acdc"]["d"] == said
+    assert helping.fromIso8601(exn.ked["dt"]) >= before.replace(microsecond=0)
+
+
+def test_build_dcr_request_unknown_hab(hab):
+    class Vault:
+        hby = hab._test_hby
+
+    conn = _dcr_connection(hab)
+    conn.hab_aid = "Enope"
+    with pytest.raises(presenting.PresentingError, match="identifier"):
+        presenting.build_dcr_request(Vault, conn)
+
+
+def test_onboarding_packet_carries_redirect_uris(monkeypatch, hab):
+    monkeypatch.setattr(configing, "is_mock_mode", lambda: False)
+    monkeypatch.setattr(presenting, "build_grant", lambda *a: "GRANT")
+    monkeypatch.setattr(presenting, "build_oobis", lambda *a, **k: [])
+
+    class Vault:
+        hby = hab._test_hby
+
+    req = presenting.build_onboarding_request(
+        Vault,
+        {"said": "ECRED", "holder_pre": hab.pre},
+        "http://s/udap/onboarding",
+        "Esrv",
+        redirect_uris=["http://127.0.0.1:9000/cb"],
+    )
+    assert json.loads(req.body)["redirect_uris"] == ["http://127.0.0.1:9000/cb"]

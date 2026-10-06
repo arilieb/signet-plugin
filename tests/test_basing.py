@@ -62,3 +62,21 @@ def test_apply_result_and_normalize():
     assert conn.status == "approved"
     assert conn.poll_url == "http://s/p"
     assert conn.retry_after == ""
+
+
+def test_dcr_fields_round_trip_and_old_record_defaults():
+    with _db() as db:
+        conn = SignetConnection(
+            connection_id="c1",
+            redirect_uris=["http://127.0.0.1:9000/cb"],
+            client_name="Onyx",
+            scopes="read",
+        )
+        db.signet_connections.pin(keys=("c1",), val=conn)
+        assert db.signet_connections.get(keys=("c1",)) == conn
+
+        db.signet_connections.db.setVal(
+            db.signet_connections.sdb, b"c0", b'{"connection_id":"c0"}'
+        )
+        old = db.signet_connections.get(keys=("c0",))
+        assert old.redirect_uris == [] and old.client_name == "" and old.scopes == ""

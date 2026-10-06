@@ -43,6 +43,11 @@ class SignetConnection:
     purpose_status: str = ""  # Server-side status: in-review, approved, ...
     decision_provenance: dict = field(default_factory=dict)
     last_error: str = ""
+    # DCR client metadata (ONBOARDING.md S4.4). redirect_uris are approved with
+    # onboarding; scopes are what the server granted at registration.
+    redirect_uris: list = field(default_factory=list)
+    client_name: str = ""
+    scopes: str = ""
 
 
 class SignetBaser(dbing.LMDBer):

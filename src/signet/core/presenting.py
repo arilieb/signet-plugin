@@ -23,6 +23,7 @@ from keri import help
 from keri.app import signing
 from keri.core import coring, serdering
 from keri.end import ending
+from keri.peer import exchanging
 from keri.help import helping
 from keri.vc import protocoling
 
@@ -32,6 +33,7 @@ from .credentials import LEGAL_ENTITY_SCHEMA_SAID
 logger = help.ogler.getLogger(__name__)
 
 REQUESTED_PURPOSE = "TREAT"
+DCR_STATEMENT_TYPE = "urn:ietf:params:oauth:software-statement-type:acdc-vlei"
 SIGNATURE_NAME = "signify"
 SIGNED_FIELDS = (
     "signify-resource",
@@ -65,14 +67,8 @@ def body_digest(body: bytes) -> str:
     return "sha-256=" + base64.b64encode(hashlib.sha256(body).digest()).decode()
 
 
-def build_grant(vault, hab, credential_said: str, server_aid: str) -> str:
-    """
-    IPEX grant exn of a received credential, addressed to ``server_aid``.
-
-    Mirrors locksmith.core.ipexing.Granter.grant but does not feed the exn back
-    into a local Exchanger: that is only needed when granting to a peer we
-    also run, and parsing our own presentation has side effects we don't want.
-    """
+def _grant_embeds(vault, credential_said: str) -> dict[str, Any]:
+    """acdc / reg / iss / anc streams of a received credential, as a grant embeds."""
     reger = vault.rgy.reger
     creder, prefixer, seqner, saider = reger.cloneCred(said=credential_said)
     if creder is None:
@@ -90,25 +86,89 @@ def build_grant(vault, hab, credential_said: str, server_aid: str) -> str:
             seal=dict(i=iserder.pre, s=iseqner.snh, d=iserder.said),
         )
         anc = vault.hby.db.cloneEvtMsg(pre=serder.pre, fn=0, dig=serder.said)
+    except Exception as exc:
+        raise PresentingError(f"Unable to build grant for the credential: {exc}")
 
+    return dict(acdc=acdc, reg=reg, iss=iss, anc=anc)
+
+
+def build_grant(vault, hab, credential_said: str, server_aid: str) -> str:
+    """
+    IPEX grant exn of a received credential, addressed to ``server_aid``.
+
+    Mirrors locksmith.core.ipexing.Granter.grant but does not feed the exn back
+    into a local Exchanger: that is only needed when granting to a peer we
+    also run, and parsing our own presentation has side effects we don't want.
+    """
+    embeds = _grant_embeds(vault, credential_said)
+
+    try:
         exn, atc = protocoling.ipexGrantExn(
             hab=hab,
             recp=server_aid,
             message="",
-            acdc=acdc,
-            reg=reg,
-            iss=iss,
-            anc=anc,
             dt=helping.nowIso8601(),
+            **embeds,
         )
-    except PresentingError:
-        raise
     except Exception as exc:
         raise PresentingError(f"Unable to build grant for the credential: {exc}")
 
     msg = bytearray(exn.raw)
     msg.extend(atc)
     return msg.decode("utf-8")
+
+
+def build_dcr_request(
+    vault,
+    connection,
+    client_name: str = "",
+    redirect_uris: list[str] | None = None,
+) -> dict[str, str]:
+    """
+    Body of POST /register (ONBOARDING.md S4.4): an IPEX grant exn of the
+    onboarded credential, carrying the client metadata in ``a.udap``.
+
+    ``ipexGrantExn`` fixes ``a`` to ``{m, i}``, so the exn is built with
+    ``exchanging.exchange`` and endorsed with ``last=False`` (the server only
+    processes transferable ``tsgs`` groups). Built fresh per call: ``dt`` is
+    the server's replay guard.
+    """
+    hab = vault.hby.habs.get(connection.hab_aid)
+    if hab is None:
+        raise PresentingError("The presenting identifier is not in this vault.")
+    if not connection.selected_credential_said or not connection.server_aid:
+        raise PresentingError("The connection has no credential or server AID.")
+
+    embeds = _grant_embeds(vault, connection.selected_credential_said)
+    udap = {"purpose": connection.purpose or REQUESTED_PURPOSE}
+    client_name = client_name or connection.client_name
+    redirect_uris = redirect_uris if redirect_uris is not None else connection.redirect_uris
+    if client_name:
+        udap["client_name"] = client_name
+    if redirect_uris:
+        udap["redirect_uris"] = list(redirect_uris)
+
+    try:
+        exn, end = exchanging.exchange(
+            route="/ipex/grant",
+            sender=hab.pre,
+            payload=dict(m="", i=connection.server_aid, udap=udap),
+            embeds=embeds,
+            date=helping.nowIso8601(),
+        )
+        ims = hab.endorse(serder=exn, last=False, pipelined=False)
+        del ims[: exn.size]
+        ims.extend(end)
+    except Exception as exc:
+        raise PresentingError(f"Unable to build the registration request: {exc}")
+
+    msg = bytearray(exn.raw)
+    msg.extend(ims)
+    return {
+        "software_statement_type": DCR_STATEMENT_TYPE,
+        "software_statement": msg.decode("utf-8"),
+        "udap": "1",
+    }
 
 
 def witness_oobi_urls(hab, pre: str | None = None) -> list[str]:
@@ -227,6 +287,7 @@ def build_onboarding_request(
     endpoint: str,
     server_aid: str,
     contacts: list[Any] | None = None,
+    redirect_uris: list[str] | None = None,
 ) -> OnboardingRequest:
     """Build and sign the POST /udap/onboarding request for ``credential``."""
     if configing.is_mock_mode():
@@ -254,6 +315,7 @@ def build_onboarding_request(
         "submitter": {"ecr_said": said, "role": credential.get("role", "")},
         "requested_purposes": [REQUESTED_PURPOSE],
         "contacts": contacts or [],
+        "redirect_uris": redirect_uris or [],
         "correlation_id": correlation_id,
         "oobis": build_oobis(hab, said, legal_entity_aid(vault, said)),
         "grant": build_grant(vault, hab, said, server_aid),

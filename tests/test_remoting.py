@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 
@@ -120,3 +122,40 @@ async def test_discover_server_legacy_mode(monkeypatch):
     _patch(monkeypatch, lambda req: httpx.Response(200, json={"issuer": "x"}))
     r = await remoting.discover_server("http://s")
     assert not r["success"]
+
+
+async def test_register_created(monkeypatch):
+    def handler(request):
+        assert request.url.path == "/register"
+        assert json.loads(request.content)["udap"] == "1"
+        return httpx.Response(
+            201, json={"client_id": "ECRED", "scopes": ["read", "write"]}
+        )
+
+    _patch(monkeypatch, handler)
+    r = await remoting.register_dynamic_client("http://s", {"udap": "1"})
+    assert r["success"] and r["client_id"] == "ECRED"
+    assert r["scopes"] == "read write"
+
+
+@pytest.mark.parametrize(
+    "code,err", [(400, "invalid_redirect_uri"), (403, "access_denied"), (503, "temporarily_unavailable")]
+)
+async def test_register_error_keeps_correlation_id(monkeypatch, code, err):
+    _patch(
+        monkeypatch,
+        lambda req: httpx.Response(
+            code, json={"error": err, "correlation_id": "abc123"}
+        ),
+    )
+    r = await remoting.register_dynamic_client("http://s", {})
+    assert not r["success"]
+    assert r["status_code"] == code
+    assert err in r["error"] and "abc123" in r["error"]
+    assert r["correlation_id"] == "abc123"
+
+
+async def test_register_mock_mode(monkeypatch):
+    monkeypatch.setattr(remoting, "is_mock_mode", lambda: True)
+    r = await remoting.register_dynamic_client("http://s", {})
+    assert r["success"] and r["client_id"]

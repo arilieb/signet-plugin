@@ -22,7 +22,7 @@ from locksmith.ui.toolkit.widgets import (
     LocksmithInvertedButton,
 )
 
-from ..core import remoting
+from ..core import configing, presenting, remoting
 
 logger = help.ogler.getLogger(__name__)
 
@@ -96,25 +96,30 @@ class DynamicClientRegistrationGateDialog(LocksmithDialog):
         self.cancel_button.setEnabled(False)
 
         try:
-            approved_purpose_grant = {
-                "purpose": connection.purpose,
-                "onboarding_id": connection.onboarding_id,
-            }
+            try:
+                registration = (
+                    {}
+                    if configing.is_mock_mode()
+                    else presenting.build_dcr_request(self.app.vault, connection)
+                )
+            except presenting.PresentingError as exc:
+                self.show_error(str(exc))
+                self._reset_buttons()
+                return
             result = await remoting.register_dynamic_client(
-                connection.base_url, approved_purpose_grant
+                connection.base_url, registration
             )
 
             if not result.get("success"):
                 self.show_error(
                     result.get("error", "Dynamic client registration failed.")
                 )
-                self.confirm_button.setEnabled(True)
-                self.confirm_button.setText("Proceed")
-                self.cancel_button.setEnabled(True)
+                self._reset_buttons()
                 return
 
             connection.status = "registered"
             connection.client_id = result.get("client_id", "")
+            connection.scopes = result.get("scopes", "")
             db.signet_connections.pin(keys=(self.connection_id,), val=connection)
 
             logger.info(
@@ -130,6 +135,9 @@ class DynamicClientRegistrationGateDialog(LocksmithDialog):
                 f"DynamicClientRegistrationGateDialog: registration failed: {exc}"
             )
             self.show_error(f"Dynamic client registration failed: {exc}")
-            self.confirm_button.setEnabled(True)
-            self.confirm_button.setText("Proceed")
-            self.cancel_button.setEnabled(True)
+            self._reset_buttons()
+
+    def _reset_buttons(self):
+        self.confirm_button.setEnabled(True)
+        self.confirm_button.setText("Proceed")
+        self.cancel_button.setEnabled(True)

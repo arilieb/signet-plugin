@@ -65,5 +65,11 @@ onboarding:
   mode: onboarding
   supported_purposes: [TREAT]
   fetch_allowlist: [127.0.0.1]
+  purpose_policy:
+    TREAT:
+      scopes: [read]
+      default_scopes: [read]
+      grant_types: [authorization_code, refresh_token]
+      response_types: [code]
   # Whitelisted QVI -> 200 approved. server.config.review.yaml has an empty list -> 202 in-review.
   whitelist: __WHITELIST__

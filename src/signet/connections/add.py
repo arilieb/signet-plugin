@@ -25,7 +25,10 @@ from locksmith.ui.toolkit.widgets import (
     LocksmithInvertedButton,
     SelectionRevealSection,
 )
-from locksmith.ui.toolkit.widgets.fields import FloatingLabelComboBox
+from locksmith.ui.toolkit.widgets.fields import (
+    FloatingLabelComboBox,
+    LocksmithPlainTextEdit,
+)
 
 from ..core import configing, credentials, devbootstrap, mock_data, presenting, remoting
 from ..db.basing import SignetConnection
@@ -43,6 +46,7 @@ class AddConnectionDialog(LocksmithDialog):
         self._partner_by_id: dict[str, dict] = {}
         self._credential_by_display: dict[str, dict] = {}
         self._credential_selectors: dict[str, FloatingLabelComboBox] = {}
+        self._redirect_inputs: dict[str, LocksmithPlainTextEdit] = {}
         self._is_submitting = False
 
         content_widget = QWidget()
@@ -175,6 +179,13 @@ class AddConnectionDialog(LocksmithDialog):
         self._credential_selectors[partner["connection_id"]] = credential_selector
         self._populate_credential_dropdown(credential_selector)
 
+        redirect_input = LocksmithPlainTextEdit()
+        redirect_input.setPlaceholderText("Redirect URIs, one per line")
+        redirect_input.setFixedWidth(420)
+        redirect_input.setFixedHeight(70)
+        page_layout.addWidget(redirect_input)
+        self._redirect_inputs[partner["connection_id"]] = redirect_input
+
         page.adjustSize()
         return page
 
@@ -210,14 +221,23 @@ class AddConnectionDialog(LocksmithDialog):
             self.show_error("Select a credential to present.")
             return
 
+        redirect_input = self._redirect_inputs.get(connection_id)
+        redirect_uris = [
+            line.strip()
+            for line in (redirect_input.toPlainText() if redirect_input else "").splitlines()
+            if line.strip()
+        ]
+
         self._is_submitting = True
         self.submit_btn.setEnabled(False)
         self.submit_btn.setText("Adding...")
         self.clear_error()
-        self._do_submit(partner, credential)
+        self._do_submit(partner, credential, redirect_uris)
 
     @qasync.asyncSlot()
-    async def _do_submit(self, partner: dict, credential: dict):
+    async def _do_submit(
+        self, partner: dict, credential: dict, redirect_uris: list[str]
+    ):
         db = self._get_db()
         if db is None:
             self.show_error("No signet database available.")
@@ -239,6 +259,7 @@ class AddConnectionDialog(LocksmithDialog):
                     credential,
                     endpoint=discovery["onboarding_endpoint"],
                     server_aid=discovery["aid"],
+                    redirect_uris=redirect_uris,
                 )
             except presenting.PresentingError as exc:
                 self.show_error(str(exc))
@@ -276,6 +297,8 @@ class AddConnectionDialog(LocksmithDialog):
                 hab_aid=request.hab_aid,
                 server_aid=request.server_aid,
                 correlation_id=request.correlation_id,
+                redirect_uris=redirect_uris,
+                client_name=partner["display_name"],
             )
             refresh.apply_result(connection, result)
             db.signet_connections.pin(keys=(connection.connection_id,), val=connection)
