@@ -152,32 +152,34 @@ async def poll_onboarding(
 
 
 async def register_dynamic_client(
-    base_url: str, approved_purpose_grant: Dict[str, Any]
+    base_url: str, registration: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
-    POST {base_url}/register -- standard UDAP Dynamic Client Registration.
+    POST {base_url}/register -- UDAP Dynamic Client Registration (ONBOARDING.md S4.4).
 
-    Returns client_id + scopes on 201 Created, per the sibling
-    "UDAP vLEI_ACDC Dynamic Client Registration" doc's shape.
+    ``registration`` is the body from presenting.build_dcr_request. 201 Created
+    returns the client (also for a repeated registration); errors keep the
+    server's RFC 7591 ``error`` code and ``correlation_id``.
     """
     if is_mock_mode():
-        return mock_data.mock_register_dynamic_client(approved_purpose_grant)
+        return mock_data.mock_register_dynamic_client(registration)
 
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            response = await client.post(
-                f"{base_url}/register", json=approved_purpose_grant
-            )
+            response = await client.post(f"{base_url}/register", json=registration)
 
         if response.status_code == 201:
             data = response.json()
+            scopes = data.get("scope", data.get("scopes"))
+            if isinstance(scopes, list):
+                scopes = " ".join(scopes)
             return {
                 "success": True,
                 "client_id": data.get("client_id"),
-                "scopes": data.get("scope", data.get("scopes")),
+                "scopes": scopes or "",
+                "data": data,
             }
-        else:
-            return {"success": False, "error": f"API error: {response.status_code}"}
+        return _error_result(response)
     except Exception as e:
         logger.error(f"Error registering dynamic client: {e}")
         return {"success": False, "error": str(e)}
