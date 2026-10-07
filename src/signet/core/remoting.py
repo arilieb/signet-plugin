@@ -100,11 +100,9 @@ async def discover_server(base_url: str) -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
-async def submit_onboarding(
-    base_url: str, url: str, body: bytes, headers: Dict[str, str]
-) -> Dict[str, Any]:
+async def submit_onboarding(base_url: str, url: str, body: bytes) -> Dict[str, Any]:
     """
-    POST the signed onboarding request to ``url`` (the discovered endpoint).
+    POST the onboarding grant (raw CESR bytes) to ``url`` (the discovered endpoint).
 
     202 means accepted and pending; 200 means a terminal decision (including
     rejection) was reached inline. Errors carry the server's correlation id.
@@ -114,7 +112,9 @@ async def submit_onboarding(
 
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            response = await client.post(url, content=body, headers=headers)
+            response = await client.post(
+                url, content=body, headers={"Content-Type": "application/cesr"}
+            )
 
         if response.status_code in (200, 202):
             return _decision_result(base_url, response)

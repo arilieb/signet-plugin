@@ -37,7 +37,7 @@ From the locksmith repo venv, run `pip install -e .`.
 
 > **Status:** these scripts and steps were written but not yet run end to end. Treat every command as unverified until you have run it.
 
-By default `LOCKSMITH_ENVIRONMENT=development` runs signet in mock mode (canned responses, fake seeded connections). Setting `SIGNET_LIVE=1` in development switches to the real signed-packet + IPEX-grant onboarding against local infrastructure. The credential chain is GLEIF External -> QVI -> LE (Practice) -> ECR Auth (to the QVI AID) -> ECR (QVI -> holder AID).
+By default `LOCKSMITH_ENVIRONMENT=development` runs signet in mock mode (canned responses, fake seeded connections). Setting `SIGNET_LIVE=1` in development switches to the real single-IPEX-grant onboarding (the grant's exn signature is the only signature) against local infrastructure. The credential chain is GLEIF External -> QVI -> LE (Practice) -> ECR Auth (to the QVI AID) -> ECR (QVI -> holder AID).
 
 ### Environment variables
 
@@ -54,6 +54,12 @@ By default `LOCKSMITH_ENVIRONMENT=development` runs signet in mock mode (canned 
 - Keystores are created under the keri base `signet-dev-live`; `--reset` deletes only that base. Never `rm -rf /usr/local/var/keri`.
 
 ### Run order
+
+#### Clean up
+```bash
+rm -rf ~/.acdc/db/oauth2
+rm -rf /usr/local/var/keri/*
+```
 
 #### 1 witnesses (keripy venv)
 ```bash
@@ -98,6 +104,8 @@ cd ~/healthkeri/echelon-server && echelons serve --host 127.0.0.1 --port 8000 \
 
 In the UI: Connections -> Add -> "Local Echelon" -> pick the ECR credential, enter the redirect URIs (one per line, e.g. `http://127.0.0.1:9000/cb`) -> submit; use Refresh to poll. The redirect URIs are approved with onboarding.
 
+Onboarding sends one IPEX grant exn of the ECR credential to `POST /udap/onboarding`; its `a.udap` carries the requested purposes, contacts, redirect URIs, correlation id and typed OOBIs. The credential's issuee must be the sending identifier, otherwise the server answers 403.
+
 Once the connection is approved (green), the DCR gate offers "Proceed": signet builds an IPEX grant exn carrying `a.udap` (purpose, client_name, redirect_uris), POSTs it to `/register`, and shows the returned `client_id` (201; repeating it returns the same client). Failures show the RFC 7591 error and `correlation_id`.
 
 ### Manual checks
@@ -105,6 +113,7 @@ Once the connection is approved (green), the DCR gate offers "Proceed": signet b
 ```
 curl -s http://127.0.0.1:8000/.well-known/udap
 curl -s http://127.0.0.1:8000/udap/onboarding/<onboarding_id>
+# POST /udap/onboarding takes a raw CESR grant (Content-Type: application/cesr), built and signed by signet; there is no hand-made curl for it
 # after DCR: 403 access_denied with no approved record (review config), 400 invalid_redirect_uri for a URI outside the approved set
 curl -s -X POST http://127.0.0.1:8000/register -H 'content-type: application/json' -d '{"software_statement_type":"x","software_statement":"x","udap":"1"}'   # 400 invalid_software_statement
 curl -s "http://127.0.0.1:8080/credential/<ECR_SAID>?chains=true&tel=true&registry=true" | head -c 300

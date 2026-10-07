@@ -2,30 +2,22 @@
 """
 signet.core.presenting module
 
-Builds the signed onboarding request described in echelon-server's
-ONBOARDING.md (S4, D16): a JSON packet carrying typed OOBIs and an IPEX grant
-of the presented credential addressed to the server, plus HTTP message
-signature headers (Signify-Resource, Signify-Timestamp, Digest, nonce) made
-with the presenting identifier's keys.
+Builds the onboarding request described in echelon-server's ONBOARDING.md
+(S4, D24): a single IPEX grant exn of the presented credential, addressed to
+the server, whose ``a.udap`` block carries the typed OOBIs and the requested
+purposes, contacts and redirect URIs. The sender's exn signature is the only
+signature; the body of POST /udap/onboarding is the raw CESR message.
 """
 
-import base64
-import hashlib
-import json
-import secrets
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlparse
 
-from hio.help import Hict
 from keri import help
 from keri.app import signing
 from keri.core import coring, serdering
-from keri.end import ending
 from keri.peer import exchanging
 from keri.help import helping
-from keri.vc import protocoling
 
 from . import configing
 from .credentials import LEGAL_ENTITY_SCHEMA_SAID
@@ -34,14 +26,6 @@ logger = help.ogler.getLogger(__name__)
 
 REQUESTED_PURPOSE = "TREAT"
 DCR_STATEMENT_TYPE = "urn:ietf:params:oauth:software-statement-type:acdc-vlei"
-SIGNATURE_NAME = "signify"
-SIGNED_FIELDS = (
-    "signify-resource",
-    "@method",
-    "@path",
-    "signify-timestamp",
-    "digest",
-)
 
 
 class PresentingError(Exception):
@@ -50,21 +34,14 @@ class PresentingError(Exception):
 
 @dataclass
 class OnboardingRequest:
-    """A fully built, signed POST /udap/onboarding request."""
+    """A fully built POST /udap/onboarding request: raw CESR grant bytes."""
 
     url: str
     body: bytes
-    headers: dict[str, str]
     correlation_id: str
     hab_name: str = ""
     hab_aid: str = ""
     server_aid: str = ""
-    packet: dict[str, Any] = field(default_factory=dict)
-
-
-def body_digest(body: bytes) -> str:
-    """Digest header value the server recomputes: sha-256=<base64>."""
-    return "sha-256=" + base64.b64encode(hashlib.sha256(body).digest()).decode()
 
 
 def _grant_embeds(vault, credential_said: str) -> dict[str, Any]:
@@ -90,32 +67,6 @@ def _grant_embeds(vault, credential_said: str) -> dict[str, Any]:
         raise PresentingError(f"Unable to build grant for the credential: {exc}")
 
     return dict(acdc=acdc, reg=reg, iss=iss, anc=anc)
-
-
-def build_grant(vault, hab, credential_said: str, server_aid: str) -> str:
-    """
-    IPEX grant exn of a received credential, addressed to ``server_aid``.
-
-    Mirrors locksmith.core.ipexing.Granter.grant but does not feed the exn back
-    into a local Exchanger: that is only needed when granting to a peer we
-    also run, and parsing our own presentation has side effects we don't want.
-    """
-    embeds = _grant_embeds(vault, credential_said)
-
-    try:
-        exn, atc = protocoling.ipexGrantExn(
-            hab=hab,
-            recp=server_aid,
-            message="",
-            dt=helping.nowIso8601(),
-            **embeds,
-        )
-    except Exception as exc:
-        raise PresentingError(f"Unable to build grant for the credential: {exc}")
-
-    msg = bytearray(exn.raw)
-    msg.extend(atc)
-    return msg.decode("utf-8")
 
 
 def build_dcr_request(
@@ -190,7 +141,7 @@ def legal_entity_aid(vault, credential_said: str) -> str | None:
     """
     The Legal Entity AID of the credential's chain: the issuee of its Legal Entity
     vLEI credential. The server cannot pre-configure it (it varies per requester), so
-    the requester conveys its key state in the packet.
+    the requester conveys its key state in ``a.udap.oobis``.
     """
     try:
         creds = vault.rgy.reger.creds
@@ -219,7 +170,7 @@ def build_oobis(
     """
     Typed oobis array: key-state OOBIs for the signer and the Legal Entity, plus the
     credential chain URL. Issuer KELs above the LE (QVI, GLEIF) are the server's trust
-    roots and come from its config, not the packet.
+    roots and come from its config, not the request.
     """
     oobis = [
         {"type": "aid", "aid": hab.pre, "url": url} for url in witness_oobi_urls(hab)
@@ -250,40 +201,13 @@ def build_oobis(
     return oobis
 
 
-def sign_request(hab, method: str, path: str, body: bytes) -> dict[str, str]:
-    """HTTP signature headers over method, path, resource, timestamp and body digest."""
-    headers = Hict(
-        [
-            ("Signify-Resource", hab.pre),
-            ("Signify-Timestamp", helping.nowIso8601()),
-            ("Digest", body_digest(body)),
-        ]
-    )
-    header, qsig = ending.siginput(
-        name=SIGNATURE_NAME,
-        method=method,
-        path=path,
-        headers=headers,
-        fields=list(SIGNED_FIELDS),
-        hab=hab,
-        nonce=secrets.token_hex(16),
-        alg="ed25519",
-        keyid=hab.pre,
-    )
-    headers.extend(header)
-    signage = ending.Signage(
-        markers={SIGNATURE_NAME: qsig},
-        indexed=False,
-        signer=None,
-        ordinal=None,
-        digest=None,
-        kind=None,
-    )
-    headers.extend(ending.signature([signage]))
-    return dict(headers)
+def _credential_issuee(vault, credential_said: str) -> str:
+    """The issuee (``a.i``) of a received credential, or '' if unknown."""
+    creder = vault.rgy.reger.creds.get(keys=(credential_said,))
+    return (creder.attrib or {}).get("i", "") if creder is not None else ""
 
 
-def build_onboarding_request(
+def build_onboarding_grant(
     vault,
     credential: dict[str, Any],
     endpoint: str,
@@ -291,12 +215,17 @@ def build_onboarding_request(
     contacts: list[Any] | None = None,
     redirect_uris: list[str] | None = None,
 ) -> OnboardingRequest:
-    """Build and sign the POST /udap/onboarding request for ``credential``."""
+    """
+    Build the POST /udap/onboarding request for ``credential`` (ONBOARDING.md S4).
+
+    Like ``build_dcr_request``, ``ipexGrantExn`` fixes ``a`` to ``{m, i}``, so the
+    exn is built with ``exchanging.exchange`` and endorsed with ``last=False``.
+    Built fresh per call: ``dt`` is the server's replay guard.
+    """
     if configing.is_mock_mode():
         return OnboardingRequest(
             url=endpoint,
-            body=b"{}",
-            headers={},
+            body=b"",
             correlation_id=uuid.uuid4().hex[:16],
             server_aid=server_aid,
         )
@@ -309,30 +238,44 @@ def build_onboarding_request(
         )
 
     said = credential["said"]
+    embeds = _grant_embeds(vault, said)
+    # The server binds the credential's issuee to the exn sender (D25): fail
+    # here with a clear message instead of a 403.
+    if _credential_issuee(vault, said) != hab.pre:
+        raise PresentingError(
+            "The credential is not issued to the presenting identifier."
+        )
+
     correlation_id = uuid.uuid4().hex[:16]
-    # Per the design doc the packet's legal_entity.aid is the AID that signs and
-    # sends the grant; with an ECR that is the person AID, not the LE's.
-    packet = {
-        "legal_entity": {"aid": hab.pre},
-        "submitter": {"ecr_said": said, "role": credential.get("role", "")},
+    udap = {
         "requested_purposes": [REQUESTED_PURPOSE],
         "contacts": contacts or [],
         "redirect_uris": redirect_uris or [],
         "correlation_id": correlation_id,
         "oobis": build_oobis(hab, said, legal_entity_aid(vault, said)),
-        "grant": build_grant(vault, hab, said, server_aid),
     }
-    body = json.dumps(packet, separators=(",", ":")).encode("utf-8")
-    headers = sign_request(hab, "POST", urlparse(endpoint).path, body)
-    headers["Content-Type"] = "application/json"
 
+    try:
+        exn, end = exchanging.exchange(
+            route="/ipex/grant",
+            sender=hab.pre,
+            payload=dict(m="", i=server_aid, udap=udap),
+            embeds=embeds,
+            date=helping.nowIso8601(),
+        )
+        ims = hab.endorse(serder=exn, last=False, pipelined=False)
+        del ims[: exn.size]
+        ims.extend(end)
+    except Exception as exc:
+        raise PresentingError(f"Unable to build the onboarding request: {exc}")
+
+    body = bytearray(exn.raw)
+    body.extend(ims)
     return OnboardingRequest(
         url=endpoint,
-        body=body,
-        headers=headers,
+        body=bytes(body),
         correlation_id=correlation_id,
         hab_name=hab.name,
         hab_aid=hab.pre,
         server_aid=server_aid,
-        packet=packet,
     )

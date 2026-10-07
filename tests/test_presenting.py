@@ -1,10 +1,7 @@
-import base64
-import hashlib
-import json
-
 import pytest
 from keri.app import habbing
-from keri.end import ending
+from keri.core import coring, serdering
+from keri.help import helping
 
 from signet.core import configing, presenting
 
@@ -15,65 +12,6 @@ def hab():
         hab = hby.makeHab(name="holder")
         hab._test_hby = hby
         yield hab
-
-
-def _verify(hab, method, path, headers):
-    inputs = [
-        i
-        for i in ending.desiginput(headers["Signature-Input"].encode())
-        if i.name == "signify"
-    ]
-    inputage = inputs[0]
-    cig = ending.designature(headers["Signature"])[0].markers["signify"]
-    lowered = {k.lower(): v for k, v in headers.items()}
-    items = []
-    for fld in inputage.fields:
-        if fld == "@method":
-            items.append(f'"{fld}": {method}')
-        elif fld == "@path":
-            items.append(f'"{fld}": {path}')
-        else:
-            items.append(f'"{fld}": {ending.normalize(lowered[fld])}')
-    values = [f"({' '.join(inputage.fields)})", f"created={inputage.created}"]
-    for name in ("expires", "nonce", "keyid", "context", "alg"):
-        value = getattr(inputage, name)
-        if value is not None:
-            values.append(f"{name}={value}")
-    items.append(f'"@signature-params: {";".join(values)}"')
-    ser = "\n".join(items).encode()
-    return inputage, hab.kever.verfers[0].verify(sig=cig.raw, ser=ser)
-
-
-def test_body_digest():
-    body = b'{"a":1}'
-    expected = base64.b64encode(hashlib.sha256(body).digest()).decode()
-    assert presenting.body_digest(body) == f"sha-256={expected}"
-
-
-def test_sign_request_headers_verify(hab):
-    body = b'{"x":"y"}'
-    headers = presenting.sign_request(hab, "POST", "/udap/onboarding", body)
-
-    assert headers["Signify-Resource"] == hab.pre
-    assert headers["Digest"] == presenting.body_digest(body)
-    assert headers["Signify-Timestamp"]
-
-    inputage, ok = _verify(hab, "POST", "/udap/onboarding", headers)
-    assert ok
-    assert set(presenting.SIGNED_FIELDS).issubset(inputage.fields)
-    assert inputage.nonce
-
-
-def test_sign_request_tampered_path_fails(hab):
-    headers = presenting.sign_request(hab, "POST", "/udap/onboarding", b"{}")
-    _, ok = _verify(hab, "POST", "/other", headers)
-    assert not ok
-
-
-def test_nonce_differs_per_request(hab):
-    a = presenting.sign_request(hab, "POST", "/p", b"{}")
-    b = presenting.sign_request(hab, "POST", "/p", b"{}")
-    assert a["Signature-Input"] != b["Signature-Input"]
 
 
 def test_build_oobis_requires_witness(hab):
@@ -88,7 +26,7 @@ def test_build_request_unknown_holder(monkeypatch, hab):
         hby = hab._test_hby
 
     with pytest.raises(presenting.PresentingError, match="local identifier"):
-        presenting.build_onboarding_request(
+        presenting.build_onboarding_grant(
             Vault,
             {"said": "E1", "holder_pre": "Enope"},
             "http://s/udap/onboarding",
@@ -96,35 +34,98 @@ def test_build_request_unknown_holder(monkeypatch, hab):
         )
 
 
-def test_build_request_packet_shape(monkeypatch, hab):
-    monkeypatch.setattr(configing, "is_mock_mode", lambda: False)
-    monkeypatch.setattr(presenting, "build_grant", lambda *a: "GRANT")
-    monkeypatch.setattr(
-        presenting,
-        "build_oobis",
-        lambda h, said, le=None: [
-            {"type": "aid", "aid": h.pre, "url": "http://w/oobi"}
-        ],
-    )
+def _acdc_for(issuee):
+    sad = {
+        "v": "ACDC10JSON000000_",
+        "d": "",
+        "i": "Eissuer",
+        "s": "Eschema",
+        "a": {"d": "", "i": issuee},
+    }
+    _, sad = coring.Saider.saidify(sad=sad, kind="JSON", label="d")
+    return coring.Sadder(ked=sad, kind="JSON").raw, sad["d"]
+
+
+def _vault(hab, issuee):
+    class Creder:
+        attrib = {"i": issuee}
+
+    class Creds:
+        def get(self, keys):
+            return Creder()
+
+    class Reger:
+        creds = Creds()
+
+    class Rgy:
+        reger = Reger()
 
     class Vault:
         hby = hab._test_hby
+        rgy = Rgy()
 
-    req = presenting.build_onboarding_request(
-        Vault,
-        {"said": "ECRED", "holder_pre": hab.pre, "role": "Auditor"},
+    return Vault
+
+
+def test_build_request_grant_shape(monkeypatch, hab):
+    monkeypatch.setattr(configing, "is_mock_mode", lambda: False)
+    acdc, said = _acdc_for(hab.pre)
+    oobis = [{"type": "aid", "aid": hab.pre, "url": "http://w/oobi"}]
+    monkeypatch.setattr(presenting, "_grant_embeds", lambda vault, s: {"acdc": acdc})
+    monkeypatch.setattr(presenting, "build_oobis", lambda h, s, le=None: oobis)
+    monkeypatch.setattr(presenting, "legal_entity_aid", lambda v, s: None)
+
+    before = helping.nowUTC()
+    req = presenting.build_onboarding_grant(
+        _vault(hab, hab.pre),
+        {"said": said, "holder_pre": hab.pre},
         "http://s/udap/onboarding",
         "Esrv",
+        contacts=["a@b.c"],
+        redirect_uris=["http://127.0.0.1:9000/cb"],
     )
-    packet = json.loads(req.body)
-    assert packet["legal_entity"]["aid"] == hab.pre
-    assert packet["submitter"] == {"ecr_said": "ECRED", "role": "Auditor"}
-    assert packet["requested_purposes"] == ["TREAT"]
-    assert packet["grant"] == "GRANT"
-    assert packet["correlation_id"] == req.correlation_id
-    assert req.headers["Digest"] == presenting.body_digest(req.body)
-    assert req.headers["Signify-Resource"] == hab.pre
-    assert req.hab_name == "holder"
+
+    assert isinstance(req.body, bytes)
+    assert not hasattr(req, "headers") and not hasattr(req, "packet")
+    exn = serdering.SerderKERI(raw=req.body)
+    assert exn.ked["r"] == "/ipex/grant"
+    assert exn.ked["i"] == hab.pre
+    assert exn.ked["a"]["i"] == "Esrv"
+    assert exn.ked["a"]["udap"] == {
+        "requested_purposes": ["TREAT"],
+        "contacts": ["a@b.c"],
+        "redirect_uris": ["http://127.0.0.1:9000/cb"],
+        "correlation_id": req.correlation_id,
+        "oobis": oobis,
+    }
+    assert exn.ked["e"]["acdc"]["d"] == said
+    assert helping.fromIso8601(exn.ked["dt"]) >= before.replace(microsecond=0)
+    assert len(req.body) > exn.size  # signature and pathed attachments follow
+    assert req.hab_name == "holder" and req.hab_aid == hab.pre
+    assert req.server_aid == "Esrv"
+    assert len(req.correlation_id) == 16
+
+
+def test_build_request_issuee_must_be_holder(monkeypatch, hab):
+    monkeypatch.setattr(configing, "is_mock_mode", lambda: False)
+    acdc, said = _acdc_for("Eother")
+    monkeypatch.setattr(presenting, "_grant_embeds", lambda vault, s: {"acdc": acdc})
+
+    with pytest.raises(presenting.PresentingError, match="not issued"):
+        presenting.build_onboarding_grant(
+            _vault(hab, "Eother"),
+            {"said": said, "holder_pre": hab.pre},
+            "http://s/udap/onboarding",
+            "Esrv",
+        )
+
+
+def test_build_request_mock_mode_is_empty(monkeypatch, hab):
+    monkeypatch.setattr(configing, "is_mock_mode", lambda: True)
+    req = presenting.build_onboarding_grant(
+        _vault(hab, hab.pre), {"said": "E1"}, "http://s/udap/onboarding", "Esrv"
+    )
+    assert req.body == b"" and req.correlation_id
 
 
 def _dcr_connection(hab, **kw):
@@ -188,21 +189,3 @@ def test_build_dcr_request_unknown_hab(hab):
     conn.hab_aid = "Enope"
     with pytest.raises(presenting.PresentingError, match="identifier"):
         presenting.build_dcr_request(Vault, conn)
-
-
-def test_onboarding_packet_carries_redirect_uris(monkeypatch, hab):
-    monkeypatch.setattr(configing, "is_mock_mode", lambda: False)
-    monkeypatch.setattr(presenting, "build_grant", lambda *a: "GRANT")
-    monkeypatch.setattr(presenting, "build_oobis", lambda *a, **k: [])
-
-    class Vault:
-        hby = hab._test_hby
-
-    req = presenting.build_onboarding_request(
-        Vault,
-        {"said": "ECRED", "holder_pre": hab.pre},
-        "http://s/udap/onboarding",
-        "Esrv",
-        redirect_uris=["http://127.0.0.1:9000/cb"],
-    )
-    assert json.loads(req.body)["redirect_uris"] == ["http://127.0.0.1:9000/cb"]
