@@ -23,8 +23,10 @@ def _patch(monkeypatch, handler):
 
 
 async def test_submit_pending(monkeypatch):
+    seen = []
+
     def handler(request):
-        assert request.headers["signify-resource"] == "Eaid"
+        seen.append(request)
         return httpx.Response(
             202,
             json={
@@ -38,8 +40,11 @@ async def test_submit_pending(monkeypatch):
 
     _patch(monkeypatch, handler)
     r = await remoting.submit_onboarding(
-        "http://s", "http://s/udap/onboarding", b"{}", {"Signify-Resource": "Eaid"}
+        "http://s", "http://s/udap/onboarding", b"CESRBYTES"
     )
+    assert seen[0].headers["content-type"] == "application/cesr"
+    assert seen[0].content == b"CESRBYTES"
+    assert "signify-resource" not in seen[0].headers
     assert r["success"] and not r["terminal"]
     assert r["onboarding_id"] == "ob1"
     assert r["poll_url"] == "http://s/udap/onboarding/ob1"
@@ -59,7 +64,7 @@ async def test_submit_terminal_approved(monkeypatch):
             },
         ),
     )
-    r = await remoting.submit_onboarding("http://s", "http://s/x", b"{}", {})
+    r = await remoting.submit_onboarding("http://s", "http://s/x", b"{}")
     assert r["terminal"] and r["status"] == "approved"
     assert r["decision_provenance"] == {"method": "whitelist"}
 
@@ -77,7 +82,7 @@ async def test_submit_error_keeps_correlation_id(monkeypatch, code):
             },
         ),
     )
-    r = await remoting.submit_onboarding("http://s", "http://s/x", b"{}", {})
+    r = await remoting.submit_onboarding("http://s", "http://s/x", b"{}")
     assert not r["success"]
     assert r["status_code"] == code
     assert "Signature is invalid" in r["error"]
