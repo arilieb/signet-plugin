@@ -305,7 +305,7 @@ def build_onboarding_grant(
 
     correlation_id = uuid.uuid4().hex[:16]
     udap = {
-        "requested_purposes": [REQUESTED_PURPOSE], # can be removed
+        "requested_purposes": [REQUESTED_PURPOSE],
         "contacts": contacts or [],
         "redirect_uris": redirect_uris or [],
         "correlation_id": correlation_id,

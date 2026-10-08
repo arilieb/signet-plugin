@@ -220,12 +220,6 @@ async def request_access_token(
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             response = await client.post(token_endpoint, data=form)
 
-        # The body includes the bearer token on success.
-        logger.info(
-            f"Token response from {token_endpoint}: "
-            f"{response.status_code} {response.text}"
-        )
-
         if response.status_code != 200:
             return _error_result(response)
         data = response.json()
