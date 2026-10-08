@@ -12,8 +12,8 @@ infrastructure (kli witness demo, vLEI-server, registrar, echelon-server):
 - from a vault doer, poll the holder's witnesses as mailboxes (Locksmith's
   director does not), request witness receipts for the holder once the witness
   OOBIs have resolved, and admit pending IPEX grants addressed to local
-  identifiers, so credentials issued by scripts/dev-live/issue-chain.sh land
-  in the vault.
+  identifiers, so credentials issued by scripts/dev-live/issue-chain-ecr.sh
+  or issue-chain-lesr.sh land in the vault.
 
 The credentials themselves are issued externally; issuing in-process is out
 of scope.
@@ -39,12 +39,15 @@ WITNESS_OOBIS = (
 )
 WITNESS_AIDS = tuple(oobi.split("/")[4] for oobi in WITNESS_OOBIS)
 SCHEMA_SERVER = "http://127.0.0.1:7723"
-# QVI, LE, ECR Auth, ECR schemas
+# QVI, LE, ECR Auth, ECR, LE Subunit, LESR Auth, LESR schemas (keep in sync with scripts/dev-live/env.sh)
 SCHEMA_SAIDS = (
     "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao",
     "ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY",
     "EH6ekLjSr8V32WyFbGe1zXjTzFs9PkTYmupJ9H65O14g",
     "EEy9PkikFcANV1l7EHukCeXqrzT1hNZjGlUk7wuMO5jw",
+    "EP1jGIb7KXotuUZJf1NSu5wQ089epFfv93cpZECj-YBs",
+    "ECoqb1jxC9f9zwh664stMAy6gpnNduvP_3SCQlLvkPAR",
+    "EHfJ563sbivepFRzk506fJenWIeVG2uXdAes8iJhHJan",
 )
 
 

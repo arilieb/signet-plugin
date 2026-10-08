@@ -8,9 +8,10 @@
 # Run Locksmith with SIGNET_LIVE=1 first so the holder exists, then:
 #
 #   source scripts/dev-live/env.sh
-#   scripts/dev-live/issue-chain.sh <HOLDER_AID> [--reset]
+#   scripts/dev-live/issue-chain-ecr.sh <HOLDER_AID> [--reset]
 #
-# Everything lives under the keri base "signet-dev-live"; --reset deletes only that base.
+# Everything lives under the keri base "signet-dev-live"; --reset deletes only that base (and is required to switch
+# between this chain and issue-chain-lesr.sh).
 set -euo pipefail
 source "$( dirname "${BASH_SOURCE[0]}" )/env.sh"
 
@@ -18,7 +19,7 @@ HOLDER_AID="${1:-}"
 [ -n "$HOLDER_AID" ] || { echo "usage: $0 <HOLDER_AID> [--reset]  (the signet-dev-holder AID Locksmith logs on vault open)"; exit 1; }
 
 curl -s -m3 -o /dev/null http://127.0.0.1:5642/ || { echo "demo witnesses are not running (kli witness demo)"; exit 1; }
-curl -fsS -m3 "http://127.0.0.1:7723/oobi/${SCHEMA_ECR}" >/dev/null || { echo "vLEI-server is not serving schemas on :7723"; exit 1; }
+curl -fsS -m3 "${SCHEMA_SERVER}/oobi/${SCHEMA_ECR}" >/dev/null || { echo "vLEI-server is not serving schemas on ${SCHEMA_SERVER} (see serve-schemas.sh)"; exit 1; }
 
 KERI_ROOT=/usr/local/var/keri
 [ -d "$KERI_ROOT" ] || KERI_ROOT="$HOME/.keri"
@@ -27,7 +28,8 @@ if [ "${2:-}" = "--reset" ]; then
   for d in "$KERI_ROOT"/*/"${DEV_LIVE_BASE}"; do
     [ -d "$d" ] && { echo "removing $d"; rm -rf "$d"; }
   done
-  rm -rf "${DEV_LIVE_OUT}"
+  # keep generated/schemas (serve-schemas.sh output; vLEI-server reads it)
+  find "${DEV_LIVE_OUT}" -mindepth 1 -maxdepth 1 ! -name schemas -exec rm -rf {} + 2>/dev/null || true
 elif kli aid --name External --base "${DEV_LIVE_BASE}" --alias External >/dev/null 2>&1; then
   echo "keystores already exist under base ${DEV_LIVE_BASE}; re-run with --reset"; exit 1
 fi
@@ -133,19 +135,20 @@ kli ipex grant --name Practice $KB --alias Practice --said "$ECR_AUTH" --recipie
 kli ipex grant --name QVI $KB --alias QVI --said "$ECR" --recipient "$HOLDER_AID"
 
 # 7. Outputs for the other processes
-SERVER_CONFIG="${DEV_LIVE_DIR}/server.config.yaml"
+SERVER_CONFIG="${DEV_LIVE_DIR}/server-ecr.config.yaml"
 render() {  # whitelist-line output
   sed -e "s/__EXTERNAL_AID__/${EXTERNAL_AID}/g" -e "s/__QVI_AID__/${QVI_AID}/g" -e "s/__PRACTICE_AID__/${PRACTICE_AID}/g" \
-      -e "s|__WHITELIST__|$1|" "${DEV_LIVE_DIR}/server.config.yaml.tmpl" > "$2"
+      -e "s|__WHITELIST__|$1|" "${DEV_LIVE_DIR}/server-ecr.config.yaml.tmpl" > "$2"
 }
-render "[{qvi_aid: ${QVI_AID}}]" "${DEV_LIVE_DIR}/server.config.yaml"
-render "[]" "${DEV_LIVE_DIR}/server.config.review.yaml"
+render "[{qvi_aid: ${QVI_AID}}]" "${DEV_LIVE_DIR}/server-ecr.config.yaml"
+render "[]" "${DEV_LIVE_DIR}/server-ecr.config.review.yaml"
 
 SIGNET_DEV_OOBIS="$(oobi_of External),$(oobi_of QVI),$(oobi_of Practice)"
 cat > "${DEV_LIVE_OUT}/env.out" <<OUT
 export SIGNET_DEV_OOBIS='${SIGNET_DEV_OOBIS}'
 export HOLDER_AID=${HOLDER_AID}
 export QVI_AID=${QVI_AID}
+export SIGNET_CREDENTIAL_SCHEMAS=${SCHEMA_ECR}
 export ECR_SAID=${ECR}
 OUT
 cat <<DONE
