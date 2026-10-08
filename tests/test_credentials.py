@@ -45,14 +45,18 @@ def _live(monkeypatch):
     monkeypatch.setattr(
         LocksmithConfig,
         "get_instance",
-        classmethod(lambda cls: type("C", (), {"environment": Environments.DEVELOPMENT})()),
+        classmethod(
+            lambda cls: type("C", (), {"environment": Environments.DEVELOPMENT})()
+        ),
     )
     monkeypatch.setenv("SIGNET_LIVE", "1")
 
 
 def _fixtures():
     return [
-        _cred("Eecr", configing.ECR_SCHEMA_SAID, "ECR", engagementContextRole="Engineer"),
+        _cred(
+            "Eecr", configing.ECR_SCHEMA_SAID, "ECR", engagementContextRole="Engineer"
+        ),
         _cred("Esub", SUBUNIT_SAID, "LE Subunit"),
         _cred("Elesr", LESR_SAID, "LESR", policyDomainRole="Clinician"),
     ]
@@ -62,7 +66,12 @@ def test_default_accepts_ecr_only(monkeypatch):
     _live(monkeypatch)
     monkeypatch.delenv("SIGNET_CREDENTIAL_SCHEMAS", raising=False)
     (found,) = credentials.filter_credentials(_vault(_fixtures()))
-    assert found == {"said": "Eecr", "title": "ECR", "holder_pre": "Eholder", "role": "Engineer"}
+    assert found == {
+        "said": "Eecr",
+        "title": "ECR",
+        "holder_pre": "Eholder",
+        "role": "Engineer",
+    }
 
 
 def test_env_set_picks_lesr_and_ignores_subunit(monkeypatch):
@@ -82,8 +91,13 @@ def test_blank_env_falls_back_to_ecr(monkeypatch):
 
 def test_multiple_schemas(monkeypatch):
     _live(monkeypatch)
-    monkeypatch.setenv("SIGNET_CREDENTIAL_SCHEMAS", f"{configing.ECR_SCHEMA_SAID}, {LESR_SAID}")
-    assert [c["said"] for c in credentials.filter_credentials(_vault(_fixtures()))] == ["Eecr", "Elesr"]
+    monkeypatch.setenv(
+        "SIGNET_CREDENTIAL_SCHEMAS", f"{configing.ECR_SCHEMA_SAID}, {LESR_SAID}"
+    )
+    assert [c["said"] for c in credentials.filter_credentials(_vault(_fixtures()))] == [
+        "Eecr",
+        "Elesr",
+    ]
 
 
 def test_mock_mode_seeds_placeholder(monkeypatch):

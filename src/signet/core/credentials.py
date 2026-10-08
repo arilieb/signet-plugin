@@ -54,7 +54,8 @@ def filter_credentials(vault) -> list[dict[str, Any]]:
                     "said": sad.get("d", ""),
                     "title": schema.get("title", ""),
                     "holder_pre": attrib.get("i", ""),
-                    "role": attrib.get("policyDomainRole") or attrib.get("engagementContextRole", ""),
+                    "role": attrib.get("policyDomainRole")
+                    or attrib.get("engagementContextRole", ""),
                 }
             )
 
