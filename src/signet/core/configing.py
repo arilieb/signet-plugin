@@ -20,6 +20,9 @@ DEFAULT_ONYX_BASE_URL = "https://onyx.example.com"
 
 DEFAULT_LOCAL_PARTNER_URL = "http://127.0.0.1:8000"
 
+# Engagement Context Role (ECR) credential schema SAID; the default submitter credential.
+ECR_SCHEMA_SAID = "EEy9PkikFcANV1l7EHukCeXqrzT1hNZjGlUk7wuMO5jw"
+
 
 def _is_development() -> bool:
     return LocksmithConfig.get_instance().environment == Environments.DEVELOPMENT
@@ -43,3 +46,13 @@ def partner_url() -> str:
 def registrar_url() -> str:
     """Base URL of the registrar hosting credential chains (SIGNET_REGISTRAR_URL)."""
     return os.environ.get("SIGNET_REGISTRAR_URL", "").rstrip("/")
+
+
+def accepted_credential_schemas() -> tuple[str, ...]:
+    """Schema SAIDs of credentials offered for onboarding (SIGNET_CREDENTIAL_SCHEMAS, comma-separated).
+
+    Defaults to the ECR schema when unset or blank.
+    """
+    raw = os.environ.get("SIGNET_CREDENTIAL_SCHEMAS", "")
+    saids = tuple(said.strip() for said in raw.split(",") if said.strip())
+    return saids or (ECR_SCHEMA_SAID,)

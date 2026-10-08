@@ -37,7 +37,10 @@ From the locksmith repo venv, run `pip install -e .`.
 
 > **Status:** these scripts and steps were written but not yet run end to end. Treat every command as unverified until you have run it.
 
-By default `LOCKSMITH_ENVIRONMENT=development` runs signet in mock mode (canned responses, fake seeded connections). Setting `SIGNET_LIVE=1` in development switches to the real single-IPEX-grant onboarding (the grant's exn signature is the only signature) against local infrastructure. The credential chain is GLEIF External -> QVI -> LE (Practice) -> ECR Auth (to the QVI AID) -> ECR (QVI -> holder AID).
+By default `LOCKSMITH_ENVIRONMENT=development` runs signet in mock mode (canned responses, fake seeded connections). Setting `SIGNET_LIVE=1` in development switches to the real single-IPEX-grant onboarding (the grant's exn signature is the only signature) against local infrastructure. Two credential chains are supported (pick one per run; see Troubleshooting for switching):
+
+- **LESR** (the main onboarding credential, `issue-chain-lesr.sh`): GLEIF External -> QVI -> LE (Practice) -> LE Subunit (Practice -> holder AID) -> LESR Auth (Practice -> QVI AID) -> LESR (QVI -> holder AID). The chain is linear: the LESR has a single `auth` edge.
+- **ECR** (`issue-chain-ecr.sh`): GLEIF External -> QVI -> LE (Practice) -> ECR Auth (to the QVI AID) -> ECR (QVI -> holder AID).
 
 ### Environment variables
 
@@ -46,7 +49,8 @@ By default `LOCKSMITH_ENVIRONMENT=development` runs signet in mock mode (canned 
 | `SIGNET_LIVE=1` | Live dev mode (only honored when `LOCKSMITH_ENVIRONMENT=development`) |
 | `SIGNET_REGISTRAR_URL` | Registrar hosting the credential chain, e.g. `http://127.0.0.1:8080` |
 | `SIGNET_PARTNER_URL` | Local Echelon base URL (default `http://127.0.0.1:8000`) |
-| `SIGNET_DEV_OOBIS` | Comma-separated extra OOBIs the bootstrap resolves (External, QVI, Practice); written by `issue-chain.sh` to `scripts/dev-live/generated/env.out` |
+| `SIGNET_CREDENTIAL_SCHEMAS` | Comma-separated schema SAIDs of the credentials offered in Add Connection (default: the ECR schema); written by the issue scripts to `env.out` (the LESR SAID for `issue-chain-lesr.sh`) |
+| `SIGNET_DEV_OOBIS` | Comma-separated extra OOBIs the bootstrap resolves (External, QVI, Practice, and the chain's schema OOBIs); written by `issue-chain-ecr.sh` / `issue-chain-lesr.sh` to `scripts/dev-live/generated/env.out` |
 
 ### Prerequisites
 
@@ -66,20 +70,24 @@ rm -rf /usr/local/var/keri/*
 cd ~/healthkeri/keripy && kli witness demo
 ```
 #### 2 schemas
+Build the combined schema directory (vital's LESR-chain schemas plus the GLEIF ones, symlinked into `scripts/dev-live/generated/schemas`) and serve it. This replaces the default `-s ./schema/acdc` and is needed by both chains, because `dev-live.json` resolves the new schema OOBIs at `kli init`.
 ```bash
-cd ~/healthkeri/vLEI && vLEI-server -s ./schema/acdc -c ./samples/acdc -o ./samples/oobis -p 7723
+cd ~/healthkeri/signet-plugin && scripts/dev-live/serve-schemas.sh          # builds the dir, prints the command
+cd ~/healthkeri/vLEI && vLEI-server -s ~/healthkeri/signet-plugin/scripts/dev-live/generated/schemas -c ./samples/acdc -o ./samples/oobis -p 7723
 ```
+(`serve-schemas.sh --run` builds and launches it in one step.) Restart any vLEI-server that is already running. Check that each new schema OOBI returns the schema JSON, not an empty 200: `curl http://127.0.0.1:7723/oobi/<SAID>` (SAIDs are in `scripts/dev-live/env.sh`).
 
 #### 3 Locksmith + signet in live dev; 
 on vault open the holder "signet-dev-holder" is created and its AID logged. Leave it running (it must receive the grants).
 ```bash
-cd ~/healthkeri/locksmith && LOCKSMITH_ENVIRONMENT=development SIGNET_LIVE=1 \
+cd ~/healthkeri/locksmith/src/locksmith && LOCKSMITH_ENVIRONMENT=development SIGNET_LIVE=1 \
   SIGNET_REGISTRAR_URL=http://127.0.0.1:8080 python main.py
 ```
 
 #### 4 issue the chain and grant it to the holder
 ```bash
-cd ~/healthkeri/signet-plugin && scripts/dev-live/issue-chain.sh <HOLDER_AID> --reset
+cd ~/healthkeri/signet-plugin && scripts/dev-live/issue-chain-lesr.sh EDqyx_rMkeZT63D41DjSstHUDwx_1W_0qtnKz30iGIJb --reset
+# or, for the ECR chain: scripts/dev-live/issue-chain-ecr.sh <HOLDER_AID> --reset
 ```
 Restart Locksmith with: 
 ```bash
@@ -97,14 +105,14 @@ registrar start --name Registrar --base signet-dev-live --alias Registrar --issu
 ```bash
 cd ~/healthkeri/echelon-server && echelons serve --host 127.0.0.1 --port 8000 \
   --name Provider --base signet-dev-live --alias Provider \
-  --config ~/healthkeri/signet-plugin/scripts/dev-live/server.config.yaml
+  --config ~/healthkeri/signet-plugin/scripts/dev-live/server-lesr.config.yaml
 ```
 
-`issue-chain.sh` prints the QVI AID and the exact commands for steps 5-6.
+The issue script prints the QVI AID and the exact commands for steps 5-6. For the ECR chain use `server-ecr.config.yaml` instead.
 
-In the UI: Connections -> Add -> "Local Echelon" -> pick the ECR credential, enter the redirect URIs (one per line, e.g. `http://127.0.0.1:9000/cb`) -> submit; use Refresh to poll. The redirect URIs are approved with onboarding.
+In the UI: Connections -> Add -> "Local Echelon" -> pick the LESR credential (the ECR for the ECR chain), enter the redirect URIs (one per line, e.g. `http://127.0.0.1:9000/cb`) -> submit; use Refresh to poll. The redirect URIs are approved with onboarding.
 
-Onboarding sends one IPEX grant exn of the ECR credential to `POST /udap/onboarding`; its `a.udap` carries the requested purposes, contacts, redirect URIs, correlation id and typed OOBIs. The credential's issuee must be the sending identifier, otherwise the server answers 403.
+Onboarding sends one IPEX grant exn of the selected credential (the LESR) to `POST /udap/onboarding`; its `a.udap` carries the requested purposes, contacts, redirect URIs, correlation id and typed OOBIs. The credential's issuee must be the sending identifier, otherwise the server answers 403.
 
 Once the connection is approved (green), the DCR gate offers "Proceed": signet builds an IPEX grant exn carrying `a.udap` (purpose, client_name, redirect_uris), POSTs it to `/register`, and shows the returned `client_id` (201; repeating it returns the same client). Failures show the RFC 7591 error and `correlation_id`.
 
@@ -116,7 +124,7 @@ curl -s http://127.0.0.1:8000/udap/onboarding/<onboarding_id>
 # POST /udap/onboarding takes a raw CESR grant (Content-Type: application/cesr), built and signed by signet; there is no hand-made curl for it
 # after DCR: 403 access_denied with no approved record (review config), 400 invalid_redirect_uri for a URI outside the approved set
 curl -s -X POST http://127.0.0.1:8000/register -H 'content-type: application/json' -d '{"software_statement_type":"x","software_statement":"x","udap":"1"}'   # 400 invalid_software_statement
-curl -s "http://127.0.0.1:8080/credential/<ECR_SAID>?chains=true&tel=true&registry=true" | head -c 300
+curl -s "http://127.0.0.1:8080/credential/<LESR_SAID>?chains=true&tel=true&registry=true" | head -c 300
 # witness holds the holder KEL (key-state refresh path); header value is a witness AID
 curl -H "CESR-DESTINATION: BBilc4-L3tFUnfM_wJr4S4OJanAv_VmF_dJNN6vkf2Ha" \
   "http://127.0.0.1:5642/log?pre=<HOLDER_AID>" | head -c 300
@@ -124,14 +132,16 @@ curl -H "CESR-DESTINATION: BBilc4-L3tFUnfM_wJr4S4OJanAv_VmF_dJNN6vkf2Ha" \
 
 ### Whitelist toggle demo
 
-`server.config.yaml` whitelists the QVI AID, so onboarding returns 200 `approved`. Restart the server with `server.config.review.yaml` (empty whitelist) to get 202 `in-review`; the connection shows red until approved, then orange after Refresh. Both files are generated by `issue-chain.sh` from `server.config.yaml.tmpl`.
+`server-lesr.config.yaml` whitelists the QVI AID, so onboarding returns 200 `approved`. Restart the server with `server-lesr.config.review.yaml` (empty whitelist) to get 202 `in-review`; the connection shows red until approved, then orange after Refresh. Both files are generated into `scripts/dev-live/` (git-ignored) by `issue-chain-lesr.sh` from `server-lesr.config.yaml.tmpl` (the ECR equivalents are `server-ecr.config*.yaml`).
 
 ### Troubleshooting
 
 - **INDETERMINATE key state** in server logs: the witness lacks the holder KEL (inception not receipted) or the witness location is unknown to the server. Check the `/log?pre=` curl above.
-- **Registrar 404 on `/credential/<said>?chains=true`**: the chain was not imported into the Registrar keystore; rerun `issue-chain.sh --reset`.
+- **Registrar 404 on `/credential/<said>?chains=true`**: the chain was not imported into the Registrar keystore; rerun the issue script with `--reset`.
 - **Port conflicts**: witnesses use 5642-5644, vLEI-server 7723, echelon 8000, registrar 8080.
 - **Grants not appearing in Locksmith**: grants are admitted by a background doer every ~2s once the issuer OOBIs (`SIGNET_DEV_OOBIS`) have resolved; also each time the Add Connection dialog loads.
-- **No credential in the dropdown**: the ECR must be admitted in the vault, which needs the QVI, LE and ECR Auth grants admitted first.
+- **No credential in the dropdown**: the credential must be admitted in the vault, which needs the earlier chain grants admitted first (LESR: QVI, LE, LE Subunit and LESR Auth; ECR: QVI, LE and ECR Auth). Also check that `SIGNET_CREDENTIAL_SCHEMAS` (from `env.out`) names the chain you issued; unset, only the ECR is listed.
+- **Switching between the ECR and LESR chains**: both share the keystore base `signet-dev-live` and `generated/`, so run the other issue script with `--reset` (and restart Locksmith with the new `env.out`). `--reset` keeps `generated/schemas`.
+- **Schema OOBI returns 200 with an empty body**, or the issue script's preflight fails: the vLEI-server is not serving the combined schema dir; run `serve-schemas.sh` and restart it with `-s .../generated/schemas`.
 
-With `server.config.review.yaml` (empty whitelist) the gate is never offered while pending; a DCR sent without an approved record returns 403 `access_denied`.
+With `server-lesr.config.review.yaml` (or `server-ecr.config.review.yaml`; empty whitelist) the gate is never offered while pending; a DCR sent without an approved record returns 403 `access_denied`.

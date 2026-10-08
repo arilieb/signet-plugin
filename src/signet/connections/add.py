@@ -199,7 +199,7 @@ class AddConnectionDialog(LocksmithDialog):
         vault = self.app.vault if self.app else None
         if vault is not None and configing.is_live_dev():
             devbootstrap.admit_pending_grants(vault)
-        for credential in credentials.filter_ecr_credentials(vault):
+        for credential in credentials.filter_credentials(vault):
             display = credential.get("title") or credential.get("said", "Credential")
             self._credential_by_display[display] = credential
             selector.addItem(display)

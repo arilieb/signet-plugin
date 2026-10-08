@@ -2,23 +2,25 @@
 """
 signet.core.credentials module
 
-Filters the vault's received credentials down to the ECR (Engagement Context
-Role) credentials presented when submitting a UDAP vLEI onboarding request.
+Filters the vault's received credentials down to those whose schema SAID is in
+the accepted set (SIGNET_CREDENTIAL_SCHEMAS, default the ECR), presented when
+submitting a UDAP vLEI onboarding request.
 
-The chain is GLEIF External -> QVI -> LE -> ECR Auth -> ECR (ONBOARDING.md
-S4.6; design doc S5 recommends an ECR as the submitter credential).
+The ECR chain is GLEIF External -> QVI -> LE -> ECR Auth -> ECR; the LESR chain
+is External -> QVI -> LE -> LE Subunit -> LESR Auth -> LESR (ONBOARDING.md S4.6).
+The LESR SAID is deliberately not hardcoded here: it is pending re-saidification
+and comes from configuration.
 """
 
 from typing import Any
 
 from keri import help
 
-from .configing import is_mock_mode
+from .configing import ECR_SCHEMA_SAID, accepted_credential_schemas, is_mock_mode
 
 logger = help.ogler.getLogger(__name__)
 
 LEGAL_ENTITY_SCHEMA_SAID = "ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY"
-ECR_SCHEMA_SAID = "EEy9PkikFcANV1l7EHukCeXqrzT1hNZjGlUk7wuMO5jw"
 
 # Seeded so the "Select Credential" dropdown in AddConnectionDialog isn't
 # empty in mock mode (never in live dev, which must use real credentials).
@@ -31,8 +33,9 @@ _MOCK_CREDENTIAL = {
 }
 
 
-def filter_ecr_credentials(vault) -> list[dict[str, Any]]:
-    """Return the vault's received credentials matching the ECR schema."""
+def filter_credentials(vault) -> list[dict[str, Any]]:
+    """Return the vault's received credentials matching an accepted schema SAID."""
+    accepted = accepted_credential_schemas()
     matching: list[dict[str, Any]] = []
 
     if vault is not None and getattr(vault, "hby", None) is not None:
@@ -42,7 +45,7 @@ def filter_ecr_credentials(vault) -> list[dict[str, Any]]:
 
         for credential in vault.rgy.reger.cloneCreds(saids, vault.hby.db):
             schema = credential.get("schema") or {}  # schemer.sed: the schema dict
-            if schema.get("$id") != ECR_SCHEMA_SAID:
+            if schema.get("$id") not in accepted:
                 continue
             sad = credential.get("sad", {})
             attrib = sad.get("a", {})
@@ -51,7 +54,8 @@ def filter_ecr_credentials(vault) -> list[dict[str, Any]]:
                     "said": sad.get("d", ""),
                     "title": schema.get("title", ""),
                     "holder_pre": attrib.get("i", ""),
-                    "role": attrib.get("engagementContextRole", ""),
+                    "role": attrib.get("policyDomainRole")
+                    or attrib.get("engagementContextRole", ""),
                 }
             )
 

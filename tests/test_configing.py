@@ -28,7 +28,7 @@ def test_live_flag_disables_mock(monkeypatch):
     assert partner["display_name"] == "Local Echelon"
     assert partner["base_url"] == "http://127.0.0.1:8000"
     assert partner["purpose"] == "TREAT"
-    assert credentials.filter_ecr_credentials(None) == []
+    assert credentials.filter_credentials(None) == []
 
 
 def test_partner_url_override(monkeypatch):
@@ -46,4 +46,13 @@ def test_dev_oobis_include_extras(monkeypatch):
     monkeypatch.setenv("SIGNET_DEV_OOBIS", "http://a/oobi/E1, http://b/oobi/E2")
     oobis = devbootstrap.dev_oobis()
     assert oobis[-2:] == ["http://a/oobi/E1", "http://b/oobi/E2"]
-    assert len(oobis) == 3 + 4 + 2
+    assert len(oobis) == 12
+
+
+def test_accepted_credential_schemas(monkeypatch):
+    monkeypatch.delenv("SIGNET_CREDENTIAL_SCHEMAS", raising=False)
+    assert configing.accepted_credential_schemas() == (configing.ECR_SCHEMA_SAID,)
+    monkeypatch.setenv("SIGNET_CREDENTIAL_SCHEMAS", " E1 ,E2,, ")
+    assert configing.accepted_credential_schemas() == ("E1", "E2")
+    monkeypatch.setenv("SIGNET_CREDENTIAL_SCHEMAS", "  ")
+    assert configing.accepted_credential_schemas() == (configing.ECR_SCHEMA_SAID,)
