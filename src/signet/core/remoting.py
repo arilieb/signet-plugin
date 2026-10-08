@@ -23,6 +23,7 @@ from keri import help
 
 from . import mock_data
 from .configing import is_mock_mode
+from .presenting import ASSERTION_TYPE
 
 logger = help.ogler.getLogger(__name__)
 
@@ -77,6 +78,8 @@ async def discover_server(base_url: str) -> Dict[str, Any]:
     GET {base_url}/.well-known/udap -- find the onboarding endpoint and server AID.
 
     Fails if the server does not advertise onboarding (legacy mode).
+    ``token_endpoint`` is returned when advertised ("" otherwise): onboarding
+    does not need it, Authenticate does.
     """
     if is_mock_mode():
         return mock_data.mock_discover_server(base_url)
@@ -94,7 +97,12 @@ async def discover_server(base_url: str) -> Dict[str, Any]:
                 "success": False,
                 "error": "Server does not offer onboarding.",
             }
-        return {"success": True, "onboarding_endpoint": endpoint, "aid": aid}
+        return {
+            "success": True,
+            "onboarding_endpoint": endpoint,
+            "aid": aid,
+            "token_endpoint": data.get("token_endpoint") or "",
+        }
     except Exception as e:
         logger.error(f"Error discovering server metadata: {e}")
         return {"success": False, "error": str(e)}
@@ -182,4 +190,54 @@ async def register_dynamic_client(
         return _error_result(response)
     except Exception as e:
         logger.error(f"Error registering dynamic client: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def request_access_token(
+    token_endpoint: str, client_id: str, client_assertion: str, scope: str = ""
+) -> Dict[str, Any]:
+    """
+    POST ``token_endpoint`` -- OAuth 2.0 ``client_credentials`` with an ACDC client
+    assertion (``client_assertion`` from presenting.build_token_assertion).
+
+    ``client_id`` is the value the server issued at DCR (never assumed to be
+    the credential SAID). ``scope`` is omitted unless given, so the server applies
+    its default scopes. Errors are ``{error, error_description}`` bodies.
+    """
+    if is_mock_mode():
+        return mock_data.mock_request_access_token(client_id)
+
+    form = {
+        "grant_type": "client_credentials",
+        "client_id": client_id,
+        "client_assertion_type": ASSERTION_TYPE,
+        "client_assertion": client_assertion,
+    }
+    if scope:
+        form["scope"] = scope
+
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            response = await client.post(token_endpoint, data=form)
+
+        if response.status_code != 200:
+            return _error_result(response)
+        data = response.json()
+        if not isinstance(data, dict) or not data.get("access_token"):
+            return {
+                "success": False,
+                "error": "The server returned no access token.",
+                "status_code": response.status_code,
+                "correlation_id": "",
+            }
+        return {
+            "success": True,
+            "access_token": data["access_token"],
+            "token_type": data.get("token_type", "Bearer"),
+            "expires_in": data.get("expires_in"),
+            "scope": data.get("scope", ""),
+            "data": data,
+        }
+    except Exception as e:
+        logger.error(f"Error requesting access token: {e}")
         return {"success": False, "error": str(e)}

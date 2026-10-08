@@ -59,6 +59,7 @@ def mock_discover_server(base_url: str) -> Dict[str, Any]:
         "success": True,
         "onboarding_endpoint": f"{base_url}/udap/onboarding",
         "aid": "EMockServerAid0000000000000000000000000000000",
+        "token_endpoint": f"{base_url}/token",
     }
 
 
@@ -106,6 +107,17 @@ def mock_register_dynamic_client(
         "success": True,
         "client_id": f"client-{uuid.uuid4().hex[:12]}",
         "scopes": approved_purpose_grant.get("scope", "system/Patient.read"),
+    }
+
+
+def mock_request_access_token(client_id: str) -> Dict[str, Any]:
+    """Canned 200 response for POST /token (client_credentials)."""
+    return {
+        "success": True,
+        "access_token": uuid.uuid4().hex,
+        "token_type": "Bearer",
+        "expires_in": 3600,
+        "scope": "read",
     }
 
 

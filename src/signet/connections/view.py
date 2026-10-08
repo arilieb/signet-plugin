@@ -29,7 +29,7 @@ from locksmith.ui.toolkit.widgets import (
 )
 
 from . import refresh
-from .status import STATUS_DISPLAY
+from .status import STATUS_DISPLAY, format_expiry
 
 logger = help.ogler.getLogger(__name__)
 
@@ -72,7 +72,7 @@ class ViewConnectionDialog(LocksmithDialog):
             buttons=self.button_row,
         )
 
-        self.setFixedSize(480, 325)
+        self.setFixedSize(480, 360)
         self.close_btn.clicked.connect(self.close)
 
         self._build_content()
@@ -151,6 +151,13 @@ class ViewConnectionDialog(LocksmithDialog):
         )
         if connection.client_id:
             row = self._add_field_row(info_grid, row, "Client ID", connection.client_id)
+        if connection.has_valid_token():
+            row = self._add_field_row(
+                info_grid,
+                row,
+                "Authenticated",
+                f"Until {format_expiry(connection.token_expires_at)}",
+            )
 
         self.content_layout.addWidget(info_container)
         self.content_layout.addStretch()

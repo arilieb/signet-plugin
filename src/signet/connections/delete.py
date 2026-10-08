@@ -44,6 +44,7 @@ class DeleteConnectionDialog(LocksmithResourceDeletionDialog):
         """Handle the delete button click and remove the connection record."""
         try:
             self.db.signet_connections.rem(keys=(self.connection_id,))
+            self.db.rem_client_ids(self.connection_id)
         except Exception as exc:
             logger.exception(
                 f"DeleteConnectionDialog: failed to delete connection {self.connection_id}: {exc}"

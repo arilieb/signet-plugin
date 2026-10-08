@@ -60,7 +60,7 @@ class SignetPlugin(PluginBase):
 
     def _build_menu(self) -> None:
         self._entry_button = MenuButton(
-            QIcon(":/assets/material-icons/verified.svg"),
+            QIcon(":/assets/custom/logos/signet-icon.png"),
             "Keriguard Signet",
         )
         self._entry_button.is_account_btn = True

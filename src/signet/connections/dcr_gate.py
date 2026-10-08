@@ -117,9 +117,23 @@ class DynamicClientRegistrationGateDialog(LocksmithDialog):
                 self._reset_buttons()
                 return
 
+            client_id = result.get("client_id")
+            if not client_id:
+                self.show_error("The server did not return a client_id.")
+                self._reset_buttons()
+                return
+
             connection.status = "registered"
-            connection.client_id = result.get("client_id", "")
+            connection.client_id = client_id
             connection.scopes = result.get("scopes", "")
+            # Pinned to (AID, credential SAID): Authenticate sends only this
+            # value, never assuming it equals the credential SAID.
+            db.pin_client_id(
+                self.connection_id,
+                connection.hab_aid,
+                connection.selected_credential_said,
+                client_id,
+            )
             db.signet_connections.pin(keys=(self.connection_id,), val=connection)
 
             logger.info(

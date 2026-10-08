@@ -3,7 +3,9 @@ import json
 import httpx
 import pytest
 
-from signet.core import remoting
+from urllib.parse import parse_qsl
+
+from signet.core import presenting, remoting
 
 
 @pytest.fixture(autouse=True)
@@ -120,6 +122,7 @@ async def test_discover_server(monkeypatch):
         "success": True,
         "onboarding_endpoint": "http://s/udap/onboarding",
         "aid": "Esrv",
+        "token_endpoint": "",
     }
 
 
@@ -169,3 +172,113 @@ async def test_register_mock_mode(monkeypatch):
     monkeypatch.setattr(remoting, "is_mock_mode", lambda: True)
     r = await remoting.register_dynamic_client("http://s", {})
     assert r["success"] and r["client_id"]
+
+
+async def test_discover_server_returns_token_endpoint(monkeypatch):
+    _patch(
+        monkeypatch,
+        lambda req: httpx.Response(
+            200,
+            json={
+                "onboarding_endpoint": "http://s/udap/onboarding",
+                "aid": "Esrv",
+                "token_endpoint": "http://s/token",
+            },
+        ),
+    )
+    r = await remoting.discover_server("http://s")
+    assert r["success"] and r["token_endpoint"] == "http://s/token"
+
+
+async def test_discover_server_without_token_endpoint_still_succeeds(monkeypatch):
+    _patch(
+        monkeypatch,
+        lambda req: httpx.Response(
+            200, json={"onboarding_endpoint": "http://s/udap/onboarding", "aid": "Esrv"}
+        ),
+    )
+    r = await remoting.discover_server("http://s")
+    assert r["success"] and r["token_endpoint"] == ""
+
+
+async def test_request_access_token_form_and_success(monkeypatch):
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        seen["ctype"] = request.headers["content-type"]
+        seen["form"] = dict(parse_qsl(request.content.decode()))
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "tok",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "scope": "read",
+            },
+        )
+
+    _patch(monkeypatch, handler)
+    r = await remoting.request_access_token("http://s/token", "srv-123", "CESRMSG")
+    assert seen["url"] == "http://s/token"
+    assert seen["ctype"] == "application/x-www-form-urlencoded"
+    assert seen["form"] == {
+        "grant_type": "client_credentials",
+        "client_id": "srv-123",  # the issued id, not the credential SAID
+        "client_assertion_type": presenting.ASSERTION_TYPE,
+        "client_assertion": "CESRMSG",
+    }
+    assert r["success"] and r["access_token"] == "tok"
+    assert r["token_type"] == "Bearer" and r["expires_in"] == 3600
+    assert r["scope"] == "read"
+
+
+async def test_request_access_token_sends_scope_when_given(monkeypatch):
+    seen = {}
+
+    def handler(request):
+        seen["form"] = dict(parse_qsl(request.content.decode()))
+        return httpx.Response(200, json={"access_token": "tok"})
+
+    _patch(monkeypatch, handler)
+    await remoting.request_access_token("http://s/token", "c", "a", scope="read")
+    assert seen["form"]["scope"] == "read"
+
+
+@pytest.mark.parametrize(
+    "code,err",
+    [(401, "invalid_client"), (400, "unauthorized_client")],
+)
+async def test_request_access_token_errors(monkeypatch, code, err):
+    _patch(
+        monkeypatch,
+        lambda req: httpx.Response(
+            code, json={"error": err, "error_description": f"bad: {err}"}
+        ),
+    )
+    r = await remoting.request_access_token("http://s/token", "c", "a")
+    assert not r["success"]
+    assert r["status_code"] == code
+    assert r["error"] == f"bad: {err}"
+
+
+async def test_request_access_token_200_without_token(monkeypatch):
+    _patch(monkeypatch, lambda req: httpx.Response(200, json={"token_type": "Bearer"}))
+    r = await remoting.request_access_token("http://s/token", "c", "a")
+    assert not r["success"] and "no access token" in r["error"]
+
+
+async def test_request_access_token_network_error(monkeypatch):
+    def handler(request):
+        raise httpx.ConnectError("boom")
+
+    _patch(monkeypatch, handler)
+    r = await remoting.request_access_token("http://s/token", "c", "a")
+    assert not r["success"] and "boom" in r["error"]
+
+
+async def test_request_access_token_mock_mode(monkeypatch):
+    monkeypatch.setattr(remoting, "is_mock_mode", lambda: True)
+    r = await remoting.request_access_token("", "c", "")
+    assert r["success"] and r["access_token"]
+    assert r["expires_in"] == 3600 and r["scope"] == "read"

@@ -26,6 +26,7 @@ logger = help.ogler.getLogger(__name__)
 
 REQUESTED_PURPOSE = "TREAT"
 DCR_STATEMENT_TYPE = "urn:ietf:params:oauth:software-statement-type:acdc-vlei"
+ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:acdc-vlei"
 
 
 class PresentingError(Exception):
@@ -69,6 +70,38 @@ def _grant_embeds(vault, credential_said: str) -> dict[str, Any]:
     return dict(acdc=acdc, reg=reg, iss=iss, anc=anc)
 
 
+def _build_grant_message(
+    vault,
+    hab,
+    server_aid: str,
+    credential_said: str,
+    udap: dict[str, Any],
+) -> bytearray:
+    """
+    Raw CESR IPEX grant exn of ``credential_said`` from ``hab`` to ``server_aid``.
+
+    ``ipexGrantExn`` fixes ``a`` to ``{m, i}``, so the exn is built with
+    ``exchanging.exchange`` and endorsed with ``last=False`` (the server only
+    processes transferable ``tsgs`` groups). ``dt`` is taken at call time: it is
+    the server's replay guard, so build a fresh message per request.
+    """
+    embeds = _grant_embeds(vault, credential_said)
+    exn, end = exchanging.exchange(
+        route="/ipex/grant",
+        sender=hab.pre,
+        payload=dict(m="", i=server_aid, udap=udap),
+        embeds=embeds,
+        date=helping.nowIso8601(),
+    )
+    ims = hab.endorse(serder=exn, last=False, pipelined=False)
+    del ims[: exn.size]
+    ims.extend(end)
+
+    msg = bytearray(exn.raw)
+    msg.extend(ims)
+    return msg
+
+
 def build_dcr_request(
     vault,
     connection,
@@ -90,7 +123,6 @@ def build_dcr_request(
     if not connection.selected_credential_said or not connection.server_aid:
         raise PresentingError("The connection has no credential or server AID.")
 
-    embeds = _grant_embeds(vault, connection.selected_credential_said)
     udap = {"purpose": connection.purpose or REQUESTED_PURPOSE}
     client_name = client_name or connection.client_name
     redirect_uris = (
@@ -102,26 +134,52 @@ def build_dcr_request(
         udap["redirect_uris"] = list(redirect_uris)
 
     try:
-        exn, end = exchanging.exchange(
-            route="/ipex/grant",
-            sender=hab.pre,
-            payload=dict(m="", i=connection.server_aid, udap=udap),
-            embeds=embeds,
-            date=helping.nowIso8601(),
+        msg = _build_grant_message(
+            vault,
+            hab,
+            connection.server_aid,
+            connection.selected_credential_said,
+            udap,
         )
-        ims = hab.endorse(serder=exn, last=False, pipelined=False)
-        del ims[: exn.size]
-        ims.extend(end)
+    except PresentingError:
+        raise
     except Exception as exc:
         raise PresentingError(f"Unable to build the registration request: {exc}")
 
-    msg = bytearray(exn.raw)
-    msg.extend(ims)
     return {
         "software_statement_type": DCR_STATEMENT_TYPE,
         "software_statement": msg.decode("utf-8"),
         "udap": "1",
     }
+
+
+def build_token_assertion(vault, connection) -> str:
+    """
+    ``client_assertion`` for POST /token (``client_credentials``): the same IPEX
+    grant exn of the registered credential that DCR sends, with an empty
+    ``a.udap`` (the server ignores it at token time). It must keep embedding the
+    full credential: the server re-validates it against its reger and TEL.
+    Built fresh per call: ``dt`` is the server's replay guard.
+    """
+    hab = vault.hby.habs.get(connection.hab_aid)
+    if hab is None:
+        raise PresentingError("The presenting identifier is not in this vault.")
+    if not connection.selected_credential_said or not connection.server_aid:
+        raise PresentingError("The connection has no credential or server AID.")
+
+    try:
+        msg = _build_grant_message(
+            vault,
+            hab,
+            connection.server_aid,
+            connection.selected_credential_said,
+            {},
+        )
+    except PresentingError:
+        raise
+    except Exception as exc:
+        raise PresentingError(f"Unable to build the client assertion: {exc}")
+    return msg.decode("utf-8")
 
 
 def witness_oobi_urls(hab, pre: str | None = None) -> list[str]:
@@ -238,7 +296,6 @@ def build_onboarding_grant(
         )
 
     said = credential["said"]
-    embeds = _grant_embeds(vault, said)
     # The server binds the credential's issuee to the exn sender (D25): fail
     # here with a clear message instead of a 403.
     if _credential_issuee(vault, said) != hab.pre:
@@ -256,21 +313,12 @@ def build_onboarding_grant(
     }
 
     try:
-        exn, end = exchanging.exchange(
-            route="/ipex/grant",
-            sender=hab.pre,
-            payload=dict(m="", i=server_aid, udap=udap),
-            embeds=embeds,
-            date=helping.nowIso8601(),
-        )
-        ims = hab.endorse(serder=exn, last=False, pipelined=False)
-        del ims[: exn.size]
-        ims.extend(end)
+        body = _build_grant_message(vault, hab, server_aid, said, udap)
+    except PresentingError:
+        raise
     except Exception as exc:
         raise PresentingError(f"Unable to build the onboarding request: {exc}")
 
-    body = bytearray(exn.raw)
-    body.extend(ims)
     return OnboardingRequest(
         url=endpoint,
         body=bytes(body),
