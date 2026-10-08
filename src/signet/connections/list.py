@@ -4,7 +4,7 @@ signet.connections.list module
 
 Connections list page -- shows the vault's UDAP vLEI onboarding connections
 (Onyx, and other partners), their approval status, and the row action
-("Refresh" or "Register") available for
+("Refresh", "Register" or "Authenticate") available for
 each status. Refresh is row-action-only: PaginatedTableWidget has no
 built-in table-wide refresh button.
 """
@@ -20,9 +20,11 @@ from locksmith.ui.toolkit.widgets.page import LocksmithFormPage, guarded
 
 from . import refresh
 from .add import AddConnectionDialog
+from .authenticate import AuthenticateDialog
 from .dcr_gate import DynamicClientRegistrationGateDialog
 from .status import ROW_ACTION_ICONS as _ROW_ACTION_ICONS
 from .status import STATUS_DISPLAY as _STATUS_DISPLAY
+from .status import primary_row_action
 from .view import ViewConnectionDialog
 
 logger = help.ogler.getLogger(__name__)
@@ -79,16 +81,19 @@ class ConnectionsListPage(LocksmithFormPage):
         self, row_data: dict[str, Any]
     ) -> tuple[list[str], dict[str, str]]:
         """Determine which row action to show based on connection status."""
-        status = row_data.get("_status", "")
-        if status == "needs_approval":
-            actions = ["Refresh"]
-        elif status == "approved":
-            actions = ["Register"]
-        else:
-            actions = []
+        actions = primary_row_action(
+            row_data.get("_status", ""), bool(row_data.get("_has_client_id"))
+        )
         actions.append("View")
         actions.append("Delete")
         return actions, _ROW_ACTION_ICONS
+
+    def _has_client_id(self, connection) -> bool:
+        """Whether a client_id is pinned to the connection's current (AID, SAID)."""
+        db = self._get_db()
+        if db is None or connection.status != "registered":
+            return False
+        return db.resolve_client_id(connection) is not None
 
     def _transform_connection_to_row(self, connection) -> dict[str, Any]:
         """Build a table row dict from a SignetConnection."""
@@ -103,6 +108,7 @@ class ConnectionsListPage(LocksmithFormPage):
             "Status_color": color,
             "_status": connection.status,
             "_connection_id": connection.connection_id,
+            "_has_client_id": self._has_client_id(connection),
         }
 
         # Registered (fully connected) rows show their partner's logo next
@@ -167,6 +173,14 @@ class ConnectionsListPage(LocksmithFormPage):
             self._refresh_connection(connection_id)
         elif action == "Register":
             dialog = DynamicClientRegistrationGateDialog(
+                app=self.app,
+                connection_id=connection_id,
+                on_success=self._load_connections,
+                parent=self,
+            )
+            dialog.open()
+        elif action == "Authenticate":
+            dialog = AuthenticateDialog(
                 app=self.app,
                 connection_id=connection_id,
                 on_success=self._load_connections,

@@ -110,11 +110,45 @@ cd ~/healthkeri/echelon-server && echelons serve --host 127.0.0.1 --port 8000 \
 
 The issue script prints the QVI AID and the exact commands for steps 5-6. For the ECR chain use `server-ecr.config.yaml` instead.
 
+The server configs allow the `client_credentials` grant (used by Authenticate). A dev client registered before that change keeps its old grant types: regenerate the configs with `issue-chain-*.sh --reset`, restart the server and register again.
+
 In the UI: Connections -> Add -> "Local Echelon" -> pick the LESR credential (the ECR for the ECR chain), enter the redirect URIs (one per line, e.g. `http://127.0.0.1:9000/cb`) -> submit; use Refresh to poll. The redirect URIs are approved with onboarding.
 
 Onboarding sends one IPEX grant exn of the selected credential (the LESR) to `POST /udap/onboarding`; its `a.udap` carries the requested purposes, contacts, redirect URIs, correlation id and typed OOBIs. The credential's issuee must be the sending identifier, otherwise the server answers 403.
 
 Once the connection is approved (green), the DCR gate offers "Proceed": signet builds an IPEX grant exn carrying `a.udap` (purpose, client_name, redirect_uris), POSTs it to `/register`, and shows the returned `client_id` (201; repeating it returns the same client). Failures show the RFC 7591 error and `correlation_id`.
+
+### Authenticate
+
+Registered connections get an "Authenticate" row action that obtains an access token (`grant_type=client_credentials`).
+
+**Prerequisites:** the server policy must allow `client_credentials` (already in the `server-*.config.yaml.tmpl` files); a client registered before that change must be re-registered (see step 6). The token endpoint is re-discovered from `/.well-known/udap` each time.
+
+**What it does:**
+1. Looks up the `client_id` pinned at DCR for this connection's `(sending AID, credential SAID)`. Signet never assumes `client_id` equals the credential SAID; with no matching pin it asks you to register again. (Connections registered before pinning existed are pinned lazily from their own AID and credential, and only if they have no pins yet.)
+2. Builds a fresh IPEX grant exn embedding the full credential (same recipe as DCR, with an empty `a.udap`) and POSTs it form-urlencoded to the token endpoint with `client_id`, `client_assertion_type=urn:ietf:params:oauth:client-assertion-type:acdc-vlei` and `client_assertion`. No `scope` is sent, so the server applies its default scopes.
+3. Stores the bearer token, scope and an expiry computed once at receipt on the connection. The dialog shows only the expiry, never the token; View shows "Authenticated: Until ...". The token is kept in plaintext in LMDB like the rest of the connection record.
+
+Authenticate stays available while a token is valid (`client_credentials` returns no refresh token, so re-authenticate to renew). The connection status remains `registered`.
+
+**Manual check:** the assertion is a fresh signed grant, so there is no hand-made curl for the first call. To replay one captured from the server log or a debugger:
+
+```
+curl -s -X POST http://127.0.0.1:8000/token \
+  -d grant_type=client_credentials -d client_id=<CLIENT_ID_FROM_DCR> \
+  -d client_assertion_type=urn:ietf:params:oauth:client-assertion-type:acdc-vlei \
+  --data-urlencode client_assertion=<CESR_GRANT>
+# 200 {"access_token": ..., "token_type": "Bearer", "expires_in": 3600, "scope": ...}
+# replaying the same assertion: 401 invalid_client; client registered without the grant: unauthorized_client
+```
+
+**Known echelon-server gaps** (not fixed here; none block the happy path):
+- `/token` does not check the onboarding record (approved/purpose), and the form `client_id` is not bound to the client derived from the assertion (the client is found by the embedded credential SAID).
+- Replay protection stores only the first `(SAID, dt)` per AID, and a failed first attempt still consumes it; signet always uses a fresh `dt`.
+- The audience (`a.i`) is not checked against the server AID.
+- A malformed assertion gives 500 `server_error` rather than 401 `invalid_client`.
+- The acdc-vlei assertion path has no token-time tests, and the OIDC metadata advertises an unimplemented `client_secret_post`.
+- `ONBOARDING.md` does not describe `client_credentials` token issuance.
 
 ### Manual checks
 

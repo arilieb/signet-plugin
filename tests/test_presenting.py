@@ -189,3 +189,50 @@ def test_build_dcr_request_unknown_hab(hab):
     conn.hab_aid = "Enope"
     with pytest.raises(presenting.PresentingError, match="identifier"):
         presenting.build_dcr_request(Vault, conn)
+
+
+def _stub_embeds(monkeypatch, hab):
+    sad = {"v": "ACDC10JSON000000_", "d": "", "i": hab.pre, "s": "Eschema"}
+    _, sad = coring.Saider.saidify(sad=sad, kind="JSON", label="d")
+    acdc = coring.Sadder(ked=sad, kind="JSON").raw
+    monkeypatch.setattr(presenting, "_grant_embeds", lambda vault, said: {"acdc": acdc})
+    return sad["d"]
+
+
+def test_build_token_assertion_shape(monkeypatch, hab):
+    import time
+
+    class Vault:
+        hby = hab._test_hby
+
+    said = _stub_embeds(monkeypatch, hab)
+    conn = _dcr_connection(hab)
+    first = presenting.build_token_assertion(Vault, conn)
+    time.sleep(0.01)
+    second = presenting.build_token_assertion(Vault, conn)
+
+    exn = serdering.SerderKERI(raw=first.encode())
+    assert exn.ked["r"] == "/ipex/grant"
+    assert exn.ked["i"] == hab.pre
+    assert exn.ked["a"]["i"] == "Esrv"
+    assert exn.ked["a"]["udap"] == {}
+    assert exn.ked["e"]["acdc"]["d"] == said
+    # signed by the holder: attachments follow the exn body
+    assert len(first.encode()) > exn.size
+    assert serdering.SerderKERI(raw=second.encode()).ked["dt"] != exn.ked["dt"]
+
+
+def test_build_token_assertion_errors(hab):
+    class Vault:
+        hby = hab._test_hby
+
+    conn = _dcr_connection(hab)
+    conn.hab_aid = "Enope"
+    with pytest.raises(presenting.PresentingError, match="identifier"):
+        presenting.build_token_assertion(Vault, conn)
+
+    for field in ("selected_credential_said", "server_aid"):
+        conn = _dcr_connection(hab)
+        setattr(conn, field, "")
+        with pytest.raises(presenting.PresentingError, match="credential or server"):
+            presenting.build_token_assertion(Vault, conn)
