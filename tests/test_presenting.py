@@ -236,3 +236,143 @@ def test_build_token_assertion_errors(hab):
         setattr(conn, field, "")
         with pytest.raises(presenting.PresentingError, match="credential or server"):
             presenting.build_token_assertion(Vault, conn)
+
+
+def _packet_setup(monkeypatch, hab, le_aid=None):
+    monkeypatch.setattr(configing, "is_mock_mode", lambda: False)
+    acdc, said = _acdc_for(hab.pre)
+    monkeypatch.setattr(presenting, "_grant_embeds", lambda vault, s: {"acdc": acdc})
+    monkeypatch.setattr(presenting, "legal_entity_aid", lambda v, s: le_aid)
+    monkeypatch.setattr(
+        presenting,
+        "witness_oobi_urls",
+        lambda h, pre=None: [f"http://w/oobi/{pre or h.pre}"],
+    )
+    return said
+
+
+def test_build_packet_shape(monkeypatch, hab):
+    import json
+
+    said = _packet_setup(monkeypatch, hab, le_aid="Ele")
+    req = presenting.build_onboarding_packet(
+        _vault(hab, hab.pre),
+        {"said": said, "holder_pre": hab.pre, "role": "Data Exchange Representative"},
+        "http://s/onboarding",
+        "Esrv",
+    )
+
+    assert req.content_type == "application/json"
+    packet = json.loads(req.body)
+    assert set(packet) == {
+        "correlation_id",
+        "legal_entity",
+        "submitter",
+        "requested_purposes",
+        "client_metadata",
+        "contacts",
+        "ipex_grant",
+    }
+    assert packet["correlation_id"] == req.correlation_id
+    assert packet["legal_entity"] == {
+        "lei": presenting.DEMO_LEI,
+        "aid": "Ele",
+        "qvi_lei": presenting.DEMO_QVI_LEI,
+        "oobi": ["http://w/oobi/Ele"],
+    }
+    assert packet["submitter"] == {"role": "Data Exchange Representative"}
+    assert packet["requested_purposes"] == [
+        {"purpose": "TREAT", "scopes": presenting.DEMO_SCOPES}
+    ]
+    assert packet["client_metadata"] == {}
+    assert packet["contacts"] == {
+        "technical": presenting.DEMO_TECHNICAL_CONTACT,
+        "security": presenting.DEMO_SECURITY_CONTACT,
+    }
+
+    exn = serdering.SerderKERI(raw=packet["ipex_grant"].encode())
+    assert exn.ked["r"] == "/ipex/grant"
+    assert exn.ked["i"] == hab.pre
+    assert exn.ked["a"] == {"m": "", "i": "Esrv"}
+    assert exn.ked["e"]["acdc"]["d"] == said
+    assert req.hab_aid == hab.pre and req.server_aid == "Esrv"
+
+
+def test_build_packet_le_aid_falls_back_to_hab(monkeypatch, hab):
+    import json
+
+    said = _packet_setup(monkeypatch, hab)
+    req = presenting.build_onboarding_packet(
+        _vault(hab, hab.pre),
+        {"said": said, "holder_pre": hab.pre},
+        "http://s/o",
+        "Esrv",
+    )
+    assert json.loads(req.body)["legal_entity"]["aid"] == hab.pre
+
+
+def test_build_packet_requires_server_aid(monkeypatch, hab):
+    said = _packet_setup(monkeypatch, hab)
+    with pytest.raises(
+        presenting.PresentingError, match="SIGNET_ONBOARDING_SERVER_AID"
+    ):
+        presenting.build_onboarding_packet(
+            _vault(hab, hab.pre),
+            {"said": said, "holder_pre": hab.pre},
+            "http://s/o",
+            "",
+        )
+
+
+def test_build_packet_requires_witness_oobis(monkeypatch, hab):
+    said = _packet_setup(monkeypatch, hab)
+    monkeypatch.setattr(presenting, "witness_oobi_urls", lambda h, pre=None: [])
+    with pytest.raises(presenting.PresentingError, match="witness"):
+        presenting.build_onboarding_packet(
+            _vault(hab, hab.pre),
+            {"said": said, "holder_pre": hab.pre},
+            "http://s/o",
+            "Esrv",
+        )
+
+
+def test_build_packet_mock_mode_is_empty(monkeypatch, hab):
+    monkeypatch.setattr(configing, "is_mock_mode", lambda: True)
+    req = presenting.build_onboarding_packet(
+        _vault(hab, hab.pre), {"said": "E1"}, "http://s/o", "Esrv"
+    )
+    assert req.body == b"" and req.content_type == "application/json"
+    assert req.correlation_id
+
+
+def test_build_request_dispatches_on_format(monkeypatch, hab):
+    monkeypatch.setattr(configing, "is_mock_mode", lambda: True)
+    args = (_vault(hab, hab.pre), {"said": "E1"}, "http://s/o", "Esrv")
+
+    monkeypatch.delenv("SIGNET_ONBOARDING_FORMAT", raising=False)
+    assert presenting.build_onboarding_request(*args).content_type == "application/cesr"
+    monkeypatch.setenv("SIGNET_ONBOARDING_FORMAT", "json")
+    assert presenting.build_onboarding_request(*args).content_type == "application/json"
+
+
+def test_build_packet_omit_grant(monkeypatch, hab):
+    import json
+
+    said = _packet_setup(monkeypatch, hab, le_aid="Ele")
+    monkeypatch.setenv("SIGNET_ONBOARDING_OMIT_GRANT", "1")
+
+    def no_grant(*a, **kw):
+        raise AssertionError("grant must not be built")
+
+    monkeypatch.setattr(presenting, "_build_grant_message", no_grant)
+    req = presenting.build_onboarding_packet(
+        _vault(hab, hab.pre),
+        {"said": said, "holder_pre": hab.pre, "role": "R"},
+        "http://s/o",
+        "",  # no server AID needed without a grant
+    )
+    packet = json.loads(req.body)
+    assert "ipex_grant" not in packet
+    assert packet["legal_entity"]["aid"] == "Ele"
+    assert packet["submitter"] == {"role": "R"}
+    assert req.hab_aid == hab.pre

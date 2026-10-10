@@ -2,7 +2,7 @@ from locksmith.core.configing import Environments, LocksmithConfig
 
 from signet.core import configing, credentials
 
-LESR_SAID = "ELesrSchemaPlaceholder00000000000000000000"
+LESR_SAID = configing.LESR_SCHEMA_SAID
 SUBUNIT_SAID = "ESubunitSchemaPlaceholder000000000000000000"
 
 
@@ -62,15 +62,15 @@ def _fixtures():
     ]
 
 
-def test_default_accepts_ecr_only(monkeypatch):
+def test_default_accepts_lesr_only(monkeypatch):
     _live(monkeypatch)
     monkeypatch.delenv("SIGNET_CREDENTIAL_SCHEMAS", raising=False)
     (found,) = credentials.filter_credentials(_vault(_fixtures()))
     assert found == {
-        "said": "Eecr",
-        "title": "ECR",
+        "said": "Elesr",
+        "title": "LESR",
         "holder_pre": "Eholder",
-        "role": "Engineer",
+        "role": "Clinician",
     }
 
 
@@ -82,9 +82,16 @@ def test_env_set_picks_lesr_and_ignores_subunit(monkeypatch):
     assert found["role"] == "Clinician"
 
 
-def test_blank_env_falls_back_to_ecr(monkeypatch):
+def test_blank_env_falls_back_to_lesr(monkeypatch):
     _live(monkeypatch)
     monkeypatch.setenv("SIGNET_CREDENTIAL_SCHEMAS", " , ")
+    (found,) = credentials.filter_credentials(_vault(_fixtures()))
+    assert found["said"] == "Elesr"
+
+
+def test_env_set_picks_ecr(monkeypatch):
+    _live(monkeypatch)
+    monkeypatch.setenv("SIGNET_CREDENTIAL_SCHEMAS", configing.ECR_SCHEMA_SAID)
     (found,) = credentials.filter_credentials(_vault(_fixtures()))
     assert found["said"] == "Eecr"
 

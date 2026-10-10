@@ -33,7 +33,7 @@ class SignetConnection:
     client_id: str = ""  # Populated post-DCR
     created_at: str = field(default_factory=helping.nowIso8601)
     last_checked_at: str = ""
-    # Onboarding state added with the signed-packet flow. Every field is
+    # Onboarding state added with the grant-based flow. Every field is
     # defaulted so connections pinned before these existed still deserialize.
     hab_name: str = ""  # Local identifier that signed and presented
     hab_aid: str = ""
