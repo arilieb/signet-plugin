@@ -3,13 +3,13 @@
 signet.core.credentials module
 
 Filters the vault's received credentials down to those whose schema SAID is in
-the accepted set (SIGNET_CREDENTIAL_SCHEMAS, default the ECR), presented when
+the accepted set (SIGNET_CREDENTIAL_SCHEMAS, default the LESR), presented when
 submitting a UDAP vLEI onboarding request.
 
 The ECR chain is GLEIF External -> QVI -> LE -> ECR Auth -> ECR; the LESR chain
 is External -> QVI -> LE -> LE Subunit -> LESR Auth -> LESR (ONBOARDING.md S4.6).
-The LESR SAID is deliberately not hardcoded here: it is pending re-saidification
-and comes from configuration.
+The default LESR SAID (configing.LESR_SCHEMA_SAID) may change on re-saidification;
+SIGNET_CREDENTIAL_SCHEMAS overrides it.
 """
 
 from typing import Any

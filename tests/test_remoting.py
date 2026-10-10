@@ -282,3 +282,213 @@ async def test_request_access_token_mock_mode(monkeypatch):
     r = await remoting.request_access_token("", "c", "")
     assert r["success"] and r["access_token"]
     assert r["expires_in"] == 3600 and r["scope"] == "read"
+
+
+KERI_URL = "https://api.example.io/slapv3/pdexv2/.well-known/keri"
+KERI_DOC = {
+    "onboarding_endpoint": "https://other.example.net/slapv3/keri/udap/onboarding",
+    "token_endpoint": "https://api.example.io/token",
+    "trust_anchor": {"aid": "Egleif"},
+}
+
+
+async def test_discover_keri_url_fetched_as_is(monkeypatch):
+    seen = []
+    monkeypatch.setenv("SIGNET_ONBOARDING_SERVER_AID", "Esrv")
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(200, json=KERI_DOC)
+
+    _patch(monkeypatch, handler)
+    r = await remoting.discover_server(KERI_URL)
+    assert seen == [KERI_URL]
+    assert r == {
+        "success": True,
+        "onboarding_endpoint": KERI_DOC["onboarding_endpoint"],
+        "aid": "Esrv",
+        "token_endpoint": "https://api.example.io/token",
+    }
+
+
+async def test_discover_keri_without_server_aid(monkeypatch):
+    monkeypatch.delenv("SIGNET_ONBOARDING_SERVER_AID", raising=False)
+    _patch(monkeypatch, lambda req: httpx.Response(200, json=KERI_DOC))
+    r = await remoting.discover_server(KERI_URL)
+    assert r["success"] and r["aid"] == ""
+
+
+async def test_discover_keri_requires_onboarding_endpoint(monkeypatch):
+    _patch(monkeypatch, lambda req: httpx.Response(200, json={"trust_anchor": {}}))
+    r = await remoting.discover_server(KERI_URL)
+    assert not r["success"]
+
+
+async def test_submit_content_type_passthrough(monkeypatch):
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(202, json={"onboarding_id": "ob1"})
+
+    _patch(monkeypatch, handler)
+    await remoting.submit_onboarding(
+        "http://s", "http://s/x", b"{}", content_type="application/json"
+    )
+    assert seen[0].headers["content-type"] == "application/json"
+
+
+async def test_content_location_joined_against_request_url(monkeypatch):
+    _patch(
+        monkeypatch,
+        lambda req: httpx.Response(
+            202,
+            json={"onboarding_id": "ob1"},
+            headers={"Content-Location": "/slapv3/onboarding/ob1"},
+        ),
+    )
+    r = await remoting.submit_onboarding(
+        KERI_URL, "https://other.example.net/slapv3/keri/udap/onboarding", b"{}"
+    )
+    assert r["poll_url"] == "https://other.example.net/slapv3/onboarding/ob1"
+
+
+async def test_poll_keri_without_poll_url_errors(monkeypatch):
+    _patch(monkeypatch, lambda req: pytest.fail("no request expected"))
+    r = await remoting.poll_onboarding(KERI_URL, "ob1")
+    assert not r["success"] and "poll" in r["error"]
+
+
+async def test_submit_logs_request_and_response(monkeypatch):
+    messages = []
+    monkeypatch.setattr(remoting.logger, "info", messages.append)
+    _patch(
+        monkeypatch,
+        lambda req: httpx.Response(
+            403, text="<html>Forbidden</html>", headers={"Server": "azure"}
+        ),
+    )
+    body = json.dumps({"correlation_id": "c1", "ipex_grant": "X" * 500}).encode()
+    r = await remoting.submit_onboarding(
+        "http://s", "http://s/x", body, "application/json"
+    )
+    assert r["error"] == "API error: 403"
+    log = "\n".join(messages)
+    assert "POST http://s/x" in log and "application/json" in log
+    assert "<500 chars omitted>" in log and "XXXXX" not in log
+    assert "403" in log and "azure" in log and "<html>Forbidden</html>" in log
+
+
+async def test_discover_keri_endpoint_override(monkeypatch):
+    monkeypatch.setenv(
+        "SIGNET_ONBOARDING_ENDPOINT", "https://api.example.io/onboarding"
+    )
+    _patch(monkeypatch, lambda req: httpx.Response(200, json=KERI_DOC))
+    r = await remoting.discover_server(KERI_URL)
+    assert r["success"]
+    assert r["onboarding_endpoint"] == "https://api.example.io/onboarding"
+
+
+async def test_discover_keri_override_replaces_missing_endpoint(monkeypatch):
+    monkeypatch.setenv(
+        "SIGNET_ONBOARDING_ENDPOINT", "https://api.example.io/onboarding"
+    )
+    _patch(monkeypatch, lambda req: httpx.Response(200, json={"trust_anchor": {}}))
+    r = await remoting.discover_server(KERI_URL)
+    assert (
+        r["success"] and r["onboarding_endpoint"] == "https://api.example.io/onboarding"
+    )
+
+
+async def test_discover_udap_ignores_endpoint_override(monkeypatch):
+    monkeypatch.setenv(
+        "SIGNET_ONBOARDING_ENDPOINT", "https://api.example.io/onboarding"
+    )
+    _patch(
+        monkeypatch,
+        lambda req: httpx.Response(
+            200, json={"onboarding_endpoint": "http://s/udap/onboarding", "aid": "Esrv"}
+        ),
+    )
+    r = await remoting.discover_server("http://s")
+    assert r["onboarding_endpoint"] == "http://s/udap/onboarding"
+
+
+DEBUG_PAGE = (
+    "<html><head><title>ValueError\n at /x</title><style>"
+    + "a{}" * 1000
+    + "</style></head><body>"
+    '<pre class="exception_value">bad &quot;grant&quot;</pre>'
+    '<textarea id="traceback_area" cols="140">Traceback (most recent call last):\n'
+    "  File x.py, line 1\nValueError: bad</textarea></body></html>"
+)
+
+
+async def test_html_error_page_is_summarised_and_saved(monkeypatch, tmp_path):
+    messages = []
+    monkeypatch.setattr(remoting.logger, "info", messages.append)
+    monkeypatch.setattr(remoting.tempfile, "gettempdir", lambda: str(tmp_path))
+    _patch(
+        monkeypatch,
+        lambda req: httpx.Response(
+            500,
+            text=DEBUG_PAGE,
+            headers={"content-type": "text/html", "Correlation-ID": "cid1"},
+        ),
+    )
+    r = await remoting.submit_onboarding("http://s", "http://s/x", b"{}")
+    log = "\n".join(messages)
+    assert 'exception: bad "grant"' in log
+    assert "Traceback (most recent call last)" in log
+    assert (tmp_path / "signet-onboarding-last-response.html").read_text() == DEBUG_PAGE
+    assert r["correlation_id"] == "cid1" and "cid1" in r["error"]
+
+
+SAFHIR_ACCEPTED = {
+    "correlation_id": "c1",
+    "aid": "Eaid",
+    "purpose": "TREAT",
+    "status": "in-review",
+    "review_id": "rev-1",
+    "decision_due": "2026-10-12T20:01:04+00:00",
+}
+OVERRIDE = "https://api.example.io/slapv3/keri/udap/onboarding"
+WRONG_HOST_LOCATION = "https://wrong.example.net/slapv3/keri/udap/onboarding/rev-1/"
+
+
+async def test_submit_review_id_and_poll_url_rebased(monkeypatch):
+    monkeypatch.setenv("SIGNET_ONBOARDING_ENDPOINT", OVERRIDE)
+    _patch(
+        monkeypatch,
+        lambda req: httpx.Response(
+            202, json=SAFHIR_ACCEPTED, headers={"Content-Location": WRONG_HOST_LOCATION}
+        ),
+    )
+    r = await remoting.submit_onboarding(KERI_URL, OVERRIDE, b"{}")
+    assert r["onboarding_id"] == "rev-1"
+    assert r["decision_due"] == "2026-10-12T20:01:04+00:00"
+    assert r["status"] == "in-review" and not r["terminal"]
+    assert r["poll_url"] == "https://api.example.io/slapv3/keri/udap/onboarding/rev-1/"
+
+
+async def test_poll_rebases_stored_poll_url(monkeypatch):
+    monkeypatch.setenv("SIGNET_ONBOARDING_ENDPOINT", OVERRIDE)
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(200, json={**SAFHIR_ACCEPTED, "status": "approved"})
+
+    _patch(monkeypatch, handler)
+    r = await remoting.poll_onboarding(KERI_URL, "rev-1", WRONG_HOST_LOCATION)
+    assert seen == ["https://api.example.io/slapv3/keri/udap/onboarding/rev-1/"]
+    assert r["terminal"] and r["status"] == "approved"
+
+
+async def test_poll_url_not_rebased_without_override_or_for_udap(monkeypatch):
+    monkeypatch.delenv("SIGNET_ONBOARDING_ENDPOINT", raising=False)
+    assert (
+        remoting._rebase_poll_url(KERI_URL, WRONG_HOST_LOCATION) == WRONG_HOST_LOCATION
+    )
+    monkeypatch.setenv("SIGNET_ONBOARDING_ENDPOINT", OVERRIDE)
+    assert remoting._rebase_poll_url("http://s", "http://s/p/1") == "http://s/p/1"

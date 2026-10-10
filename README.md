@@ -48,8 +48,12 @@ By default `LOCKSMITH_ENVIRONMENT=development` runs signet in mock mode (canned 
 |---|---|
 | `SIGNET_LIVE=1` | Live dev mode (only honored when `LOCKSMITH_ENVIRONMENT=development`) |
 | `SIGNET_REGISTRAR_URL` | Registrar hosting the credential chain, e.g. `http://127.0.0.1:8080` |
-| `SIGNET_PARTNER_URL` | Local Echelon base URL (default `http://127.0.0.1:8000`) |
-| `SIGNET_CREDENTIAL_SCHEMAS` | Comma-separated schema SAIDs of the credentials offered in Add Connection (default: the ECR schema); written by the issue scripts to `env.out` (the LESR SAID for `issue-chain-lesr.sh`) |
+| `SIGNET_PARTNER_URL` | Local Echelon base URL (default `http://127.0.0.1:8000`), or the full URL of a partner's `.well-known/keri` document (see [Demo against a `.well-known/keri` server](#demo-against-a-well-knownkeri-server)) |
+| `SIGNET_ONBOARDING_FORMAT` | `json` sends the JSON submission packet; anything else (default `cesr`) sends the single CESR grant |
+| `SIGNET_ONBOARDING_ENDPOINT` | Replaces the `onboarding_endpoint` advertised by a `.well-known/keri` document (ignored for `.well-known/udap` discovery) |
+| `SIGNET_ONBOARDING_OMIT_GRANT` | `1`/`true` sends the JSON packet without `ipex_grant` (the field is optional server-side while its grant verification is unfinished); the server AID is then not needed |
+| `SIGNET_ONBOARDING_SERVER_AID` | AID the grant is addressed to when the discovery document advertises none (`.well-known/keri`) |
+| `SIGNET_CREDENTIAL_SCHEMAS` | Comma-separated schema SAIDs of the credentials offered in Add Connection (default: the LESR schema); written by the issue scripts to `env.out` (the LESR SAID for `issue-chain-lesr.sh`) |
 | `SIGNET_DEV_OOBIS` | Comma-separated extra OOBIs the bootstrap resolves (External, QVI, Practice, and the chain's schema OOBIs); written by `issue-chain-ecr.sh` / `issue-chain-lesr.sh` to `scripts/dev-live/generated/env.out` |
 
 ### Prerequisites
@@ -118,6 +122,28 @@ Onboarding sends one IPEX grant exn of the selected credential (the LESR) to `PO
 
 Once the connection is approved (green), the DCR gate offers "Proceed": signet builds an IPEX grant exn carrying `a.udap` (purpose, client_name, redirect_uris), POSTs it to `/register`, and shows the returned `client_id` (201; repeating it returns the same client). Failures show the RFC 7591 error and `correlation_id`.
 
+### Demo against a `.well-known/keri` server
+
+For a partner that publishes `.../.well-known/keri` (e.g. `https://api-dmdh-dev.safhir.io/slapv3/pdexv2/.well-known/keri`), onboarding POSTs the JSON packet described in `SUBMISSION_SHAPE.md`, with the CESR IPEX grant in `ipex_grant`. In a non-development Locksmith environment:
+
+```bash
+SIGNET_PARTNER_URL=https://api-dmdh-dev.safhir.io/slapv3/pdexv2/.well-known/keri \
+SIGNET_ONBOARDING_FORMAT=json \
+SIGNET_ONBOARDING_SERVER_AID=<server AID> \
+SIGNET_ONBOARDING_ENDPOINT=https://api-dmdh-dev.safhir.io/slapv3/keri/udap/onboarding \
+python main.py
+```
+
+Then Connections -> Add -> select the partner (listed by host) -> submit. The partner is offered whenever `SIGNET_PARTNER_URL` is set outside mock mode, independent of `SIGNET_LIVE`. The onboarding endpoint comes from the document's `onboarding_endpoint`, unless `SIGNET_ONBOARDING_ENDPOINT` overrides it. The dev document currently advertises the wrong host (`osfsdmdhdevslapapi.azurewebsites.net`, which answers 403 `Ip Forbidden` from non-allowlisted IPs), hence the override above (the status URL the server returns in `Content-Location` has the same wrong host, so it is moved onto the override's host, keeping its path). The document also advertises no server AID, hence `SIGNET_ONBOARDING_SERVER_AID`.
+
+While the server's grant verification is under construction, set `SIGNET_ONBOARDING_OMIT_GRANT=1` to send the packet without `ipex_grant` (then `SIGNET_ONBOARDING_SERVER_AID` is not needed either).
+
+Assumptions (adjust once tried against the real server):
+- LEI, QVI LEI, purpose (`TREAT`), scopes and contacts are hardcoded demo values (`presenting.DEMO_*`), and `client_metadata` is `{}`; the redirect URIs from the dialog are ignored.
+- `ipex_grant` is a plain grant (`a = {m, i}`, no `a.udap`). `submitter` carries only `role`; no `ecr_said`/`lesr_said`.
+- `legal_entity.aid` is the chain's Legal Entity AID (the holder AID if none); `oobi` lists its witness `/oobi/{aid}` URLs.
+- No HTTP signature headers; the response is assumed echelon-like (unauthenticated, 202/200 with `onboarding_id` (or `review_id`), `status`, `decision_due`, `Content-Location`). Polling needs a `Content-Location`. Registration and Authenticate are not covered.
+
 ### Authenticate
 
 Registered connections get an "Authenticate" row action that obtains an access token (`grant_type=client_credentials`).
@@ -155,7 +181,7 @@ curl -s -X POST http://127.0.0.1:8000/token \
 ```
 curl -s http://127.0.0.1:8000/.well-known/udap
 curl -s http://127.0.0.1:8000/udap/onboarding/<onboarding_id>
-# POST /udap/onboarding takes a raw CESR grant (Content-Type: application/cesr), built and signed by signet; there is no hand-made curl for it
+# POST /udap/onboarding takes a raw CESR grant (Content-Type: application/cesr), built and signed by signet (with `SIGNET_ONBOARDING_FORMAT=json`: a JSON packet carrying the grant); there is no hand-made curl for it
 # after DCR: 403 access_denied with no approved record (review config), 400 invalid_redirect_uri for a URI outside the approved set
 curl -s -X POST http://127.0.0.1:8000/register -H 'content-type: application/json' -d '{"software_statement_type":"x","software_statement":"x","udap":"1"}'   # 400 invalid_software_statement
 curl -s "http://127.0.0.1:8080/credential/<LESR_SAID>?chains=true&tel=true&registry=true" | head -c 300
@@ -174,7 +200,7 @@ curl -H "CESR-DESTINATION: BBilc4-L3tFUnfM_wJr4S4OJanAv_VmF_dJNN6vkf2Ha" \
 - **Registrar 404 on `/credential/<said>?chains=true`**: the chain was not imported into the Registrar keystore; rerun the issue script with `--reset`.
 - **Port conflicts**: witnesses use 5642-5644, vLEI-server 7723, echelon 8000, registrar 8080.
 - **Grants not appearing in Locksmith**: grants are admitted by a background doer every ~2s once the issuer OOBIs (`SIGNET_DEV_OOBIS`) have resolved; also each time the Add Connection dialog loads.
-- **No credential in the dropdown**: the credential must be admitted in the vault, which needs the earlier chain grants admitted first (LESR: QVI, LE, LE Subunit and LESR Auth; ECR: QVI, LE and ECR Auth). Also check that `SIGNET_CREDENTIAL_SCHEMAS` (from `env.out`) names the chain you issued; unset, only the ECR is listed.
+- **No credential in the dropdown**: the credential must be admitted in the vault, which needs the earlier chain grants admitted first (LESR: QVI, LE, LE Subunit and LESR Auth; ECR: QVI, LE and ECR Auth). Also check that `SIGNET_CREDENTIAL_SCHEMAS` (from `env.out`) names the chain you issued; unset, only the LESR is listed (set it to the ECR SAID for the ECR chain).
 - **Switching between the ECR and LESR chains**: both share the keystore base `signet-dev-live` and `generated/`, so run the other issue script with `--reset` (and restart Locksmith with the new `env.out`). `--reset` keeps `generated/schemas`.
 - **Schema OOBI returns 200 with an empty body**, or the issue script's preflight fails: the vLEI-server is not serving the combined schema dir; run `serve-schemas.sh` and restart it with `-s .../generated/schemas`.
 

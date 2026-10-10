@@ -51,8 +51,74 @@ def test_dev_oobis_include_extras(monkeypatch):
 
 def test_accepted_credential_schemas(monkeypatch):
     monkeypatch.delenv("SIGNET_CREDENTIAL_SCHEMAS", raising=False)
-    assert configing.accepted_credential_schemas() == (configing.ECR_SCHEMA_SAID,)
+    assert configing.accepted_credential_schemas() == (configing.LESR_SCHEMA_SAID,)
     monkeypatch.setenv("SIGNET_CREDENTIAL_SCHEMAS", " E1 ,E2,, ")
     assert configing.accepted_credential_schemas() == ("E1", "E2")
     monkeypatch.setenv("SIGNET_CREDENTIAL_SCHEMAS", "  ")
-    assert configing.accepted_credential_schemas() == (configing.ECR_SCHEMA_SAID,)
+    assert configing.accepted_credential_schemas() == (configing.LESR_SCHEMA_SAID,)
+
+
+def test_onboarding_format(monkeypatch):
+    monkeypatch.delenv("SIGNET_ONBOARDING_FORMAT", raising=False)
+    assert configing.onboarding_format() == "cesr"
+    monkeypatch.setenv("SIGNET_ONBOARDING_FORMAT", " JSON ")
+    assert configing.onboarding_format() == "json"
+    monkeypatch.setenv("SIGNET_ONBOARDING_FORMAT", "other")
+    assert configing.onboarding_format() == "cesr"
+
+
+def test_onboarding_server_aid(monkeypatch):
+    monkeypatch.delenv("SIGNET_ONBOARDING_SERVER_AID", raising=False)
+    assert configing.onboarding_server_aid() == ""
+    monkeypatch.setenv("SIGNET_ONBOARDING_SERVER_AID", " Esrv ")
+    assert configing.onboarding_server_aid() == "Esrv"
+
+
+def test_is_keri_discovery_url():
+    assert configing.is_keri_discovery_url("https://h/slapv3/pdexv2/.well-known/keri")
+    assert configing.is_keri_discovery_url("https://h/.well-known/keri/")
+    assert not configing.is_keri_discovery_url("https://h/slapv3")
+    assert not configing.is_keri_discovery_url("https://h/.well-known/udap")
+
+
+def test_partner_url_set_detection(monkeypatch):
+    monkeypatch.delenv("SIGNET_PARTNER_URL", raising=False)
+    assert not configing.is_partner_url_set()
+    monkeypatch.setenv("SIGNET_PARTNER_URL", "  ")
+    assert not configing.is_partner_url_set()
+    monkeypatch.setenv("SIGNET_PARTNER_URL", "https://h/.well-known/keri")
+    assert configing.is_partner_url_set()
+
+
+def test_explicit_partner_offered_outside_mock(monkeypatch):
+    _env(monkeypatch, Environments.PRODUCTION)
+    monkeypatch.setenv(
+        "SIGNET_PARTNER_URL", "https://api.example.io/x/.well-known/keri"
+    )
+    (partner,) = mock_data.discoverable_connections()
+    assert partner["base_url"] == "https://api.example.io/x/.well-known/keri"
+    assert partner["connection_id"] == "api-example-io"
+    assert partner["purpose"] == "TREAT"
+
+
+def test_mock_mode_ignores_explicit_partner(monkeypatch):
+    _env(monkeypatch, Environments.DEVELOPMENT)
+    monkeypatch.setenv("SIGNET_PARTNER_URL", "https://h/.well-known/keri")
+    assert len(mock_data.discoverable_connections()) == 3
+
+
+def test_onboarding_endpoint_override(monkeypatch):
+    monkeypatch.delenv("SIGNET_ONBOARDING_ENDPOINT", raising=False)
+    assert configing.onboarding_endpoint_override() == ""
+    monkeypatch.setenv("SIGNET_ONBOARDING_ENDPOINT", " https://h/onboarding ")
+    assert configing.onboarding_endpoint_override() == "https://h/onboarding"
+
+
+def test_omit_ipex_grant(monkeypatch):
+    monkeypatch.delenv("SIGNET_ONBOARDING_OMIT_GRANT", raising=False)
+    assert not configing.omit_ipex_grant()
+    for value in ("1", " TRUE "):
+        monkeypatch.setenv("SIGNET_ONBOARDING_OMIT_GRANT", value)
+        assert configing.omit_ipex_grant()
+    monkeypatch.setenv("SIGNET_ONBOARDING_OMIT_GRANT", "0")
+    assert not configing.omit_ipex_grant()

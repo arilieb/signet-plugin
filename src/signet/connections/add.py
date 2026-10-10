@@ -256,7 +256,7 @@ class AddConnectionDialog(LocksmithDialog):
                 return
 
             try:
-                request = presenting.build_onboarding_grant(
+                request = presenting.build_onboarding_request(
                     vault,
                     credential,
                     endpoint=discovery["onboarding_endpoint"],
@@ -268,7 +268,7 @@ class AddConnectionDialog(LocksmithDialog):
                 return
 
             result = await remoting.submit_onboarding(
-                base_url, request.url, request.body
+                base_url, request.url, request.body, request.content_type
             )
             if not result.get("success"):
                 self.show_error(
