@@ -180,3 +180,87 @@ def test_delete_dialog_removes_pins():
         assert not closed
     finally:
         db.close(clear=True)
+
+
+_TOKEN_OK = {
+    "success": True,
+    "access_token": "tok",
+    "token_type": "Bearer",
+    "expires_in": 3600,
+    "scope": "read",
+}
+
+
+def _patch_network(monkeypatch, token_result, calls):
+    async def discover(base_url):
+        calls.append("discover")
+        return {"success": True, "aid": "Esrv", "token_endpoint": "http://srv/token"}
+
+    async def token(endpoint, client_id, assertion, scope=""):
+        calls.append("token")
+        return token_result
+
+    monkeypatch.setattr(remoting, "discover_server", discover)
+    monkeypatch.setattr(remoting, "request_access_token", token)
+    monkeypatch.setattr(presenting, "build_token_assertion", lambda vault, conn: "a")
+    monkeypatch.setattr(authenticate.configing, "is_mock_mode", lambda: False)
+
+
+async def test_authenticate_connection_success(monkeypatch):
+    db = _db()
+    try:
+        _patch_network(monkeypatch, _TOKEN_OK, [])
+        result = await authenticate.authenticate_connection(None, db, "c1")
+        conn = db.signet_connections.get(keys=("c1",))
+        assert result == {"success": True, "token_expires_at": conn.token_expires_at}
+        assert conn.has_valid_token()
+    finally:
+        db.close(clear=True)
+
+
+async def test_authenticate_connection_failures(monkeypatch):
+    db = _db()
+    try:
+        calls = []
+        _patch_network(monkeypatch, {"success": False, "error": "denied"}, calls)
+        result = await authenticate.authenticate_connection(None, db, "c1")
+        assert result == {"success": False, "error": "denied"}
+        assert not db.signet_connections.get(keys=("c1",)).access_token
+
+        missing = await authenticate.authenticate_connection(None, db, "nope")
+        assert missing == {"success": False, "error": "Connection not found."}
+    finally:
+        db.close(clear=True)
+
+
+async def test_ensure_authenticated_reuses_valid_token(monkeypatch):
+    db = _db()
+    try:
+        calls = []
+        _patch_network(monkeypatch, _TOKEN_OK, calls)
+        first = await authenticate.ensure_authenticated(None, db, "c1")
+        assert first["success"] and calls == ["discover", "token"]
+
+        again = await authenticate.ensure_authenticated(None, db, "c1")
+        assert again == first
+        assert calls == ["discover", "token"]  # no network the second time
+    finally:
+        db.close(clear=True)
+
+
+async def test_ensure_authenticated_reauths_when_expired(monkeypatch):
+    db = _db()
+    try:
+        calls = []
+        _patch_network(monkeypatch, _TOKEN_OK, calls)
+        await authenticate.ensure_authenticated(None, db, "c1")
+
+        conn = db.signet_connections.get(keys=("c1",))
+        conn.token_expires_at = "2000-01-01T00:00:00+00:00"
+        db.signet_connections.pin(keys=("c1",), val=conn)
+
+        result = await authenticate.ensure_authenticated(None, db, "c1")
+        assert result["success"]
+        assert calls == ["discover", "token", "discover", "token"]
+    finally:
+        db.close(clear=True)
