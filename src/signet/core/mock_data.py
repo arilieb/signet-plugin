@@ -175,3 +175,67 @@ def seed_connections() -> list[SignetConnection]:
     _POLLED_ONCE.update(connection.onboarding_id for connection in connections)
 
     return connections
+
+
+# Illustrative FHIR Groups per connection_id, shown by the FHIR APIs page in
+# mock mode only. Purely fixtures: the real Group list will come from the
+# partner's FHIR server.
+FHIR_GROUPS: dict[str, list[Dict[str, str]]] = {
+    "onyx-demo": [
+        {"group_id": "onyx-cohort-a", "display_name": "Onyx Cohort A"},
+        {"group_id": "onyx-cohort-b", "display_name": "Onyx Cohort B"},
+    ],
+    "cambia-demo": [
+        {"group_id": "cambia-members-2026", "display_name": "Cambia Members 2026"},
+        {
+            "group_id": "cambia-medicare-adv",
+            "display_name": "Cambia Medicare Advantage",
+        },
+        {"group_id": "cambia-commercial", "display_name": "Cambia Commercial"},
+    ],
+}
+
+
+def fhir_groups(connection_id: str) -> list[Dict[str, str]]:
+    """Groups offered for a connection: fixtures in mock mode, none otherwise."""
+    if not configing.is_mock_mode():
+        return []
+    return list(FHIR_GROUPS.get(connection_id, []))
+
+
+def fhir_endpoints(connection_id: str, group_id: str) -> list[Dict[str, Any]]:
+    """Illustrative FHIR endpoint rows for one Group (mock mode only)."""
+    if not configing.is_mock_mode():
+        return []
+    if group_id not in {g["group_id"] for g in FHIR_GROUPS.get(connection_id, [])}:
+        return []
+    return [
+        {
+            "Resource": "Group",
+            "Operation": "read",
+            "Endpoint": f"GET /Group/{group_id}",
+            "Scope": "system/Group.read",
+            "Purpose": "TREAT",
+        },
+        {
+            "Resource": "Group",
+            "Operation": "$export",
+            "Endpoint": f"GET /Group/{group_id}/$export",
+            "Scope": "system/Group.read",
+            "Purpose": "TREAT",
+        },
+        {
+            "Resource": "Patient",
+            "Operation": "search",
+            "Endpoint": f"GET /Patient?_group={group_id}",
+            "Scope": "system/Patient.rs",
+            "Purpose": "TREAT",
+        },
+        {
+            "Resource": "Coverage",
+            "Operation": "search",
+            "Endpoint": f"GET /Coverage?_group={group_id}",
+            "Scope": "system/Coverage.rs",
+            "Purpose": "TREAT",
+        },
+    ]

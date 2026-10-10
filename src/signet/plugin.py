@@ -5,9 +5,9 @@ signet.plugin module
 SignetPlugin -- registers the Keriguard Signet Connections page and menu.
 
 No AccountProviderPlugin mixin and no ESSR client: per explicit instruction
-this plugin needs no setup gate or account-creation flow. FHIR APIs is a
-disabled placeholder menu entry with no page registered -- it exists but
-never triggers navigation.
+this plugin needs no setup gate or account-creation flow. The FHIR APIs page
+needs locksmith's TwoStageSelectionTableWidget; against an older locksmith
+the FHIR APIs menu entry stays disabled and the rest of the plugin still loads.
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ class SignetPlugin(PluginBase):
         self._entry_button: MenuButton | None = None
         self._submenu_items: list[QWidget] = []
         self._nav_buttons_by_page: dict[str, MenuButton] = {}
+        self._fhir_available = False
 
     @property
     def plugin_id(self) -> str:
@@ -52,6 +53,16 @@ class SignetPlugin(PluginBase):
         self._pages = {
             "signet_connections_list": ConnectionsListPage(app, parent=None),
         }
+        self._fhir_available = False
+        try:
+            from .fhir.list import FhirApisListPage
+
+            self._pages["signet_fhir_apis"] = FhirApisListPage(app, parent=None)
+            self._fhir_available = True
+        except ImportError:
+            logger.warning(
+                "locksmith lacks TwoStageSelectionTableWidget; FHIR APIs disabled"
+            )
         self._build_menu()
 
     # -------------------------------------------------------------------------
@@ -78,10 +89,15 @@ class SignetPlugin(PluginBase):
         items.append(connections_btn)
         self._nav_buttons_by_page["signet_connections_list"] = connections_btn
 
-        # FHIR APIs: menu item exists but never triggers navigation or logic.
         fhir_btn = MenuButton(QIcon(":/assets/material-icons/api.svg"), "FHIR APIs")
-        fhir_btn.setEnabled(False)
-        fhir_btn.setToolTip("Coming soon")
+        if self._fhir_available:
+            fhir_btn.clicked.connect(
+                self._make_nav_handler("signet_fhir_apis", fhir_btn)
+            )
+            self._nav_buttons_by_page["signet_fhir_apis"] = fhir_btn
+        else:
+            fhir_btn.setEnabled(False)
+            fhir_btn.setToolTip("Requires a newer Locksmith")
         items.append(fhir_btn)
 
         return items

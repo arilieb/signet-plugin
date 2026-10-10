@@ -3,8 +3,15 @@ Connection + FHIR API KIM plugin client
 
 Locksmith plugin implementing "Keriguard Signet": a Connections CRUD that walks a user through
 Onyx's asynchronous UDAP vLEI onboarding flow (submit an onboarding request, poll/refresh for
-approval, then complete Dynamic Client Registration). A second menu item, FHIR APIs, is stubbed
-but inert (disabled, no page registered).
+approval, then complete Dynamic Client Registration). A second menu item, FHIR APIs, opens a
+table of FHIR endpoints: pick a registered connection, then a Group ID, to list that Group's
+endpoints. Clicking a row first authenticates against the selected connection (reusing a
+still-valid access token), then runs the (currently placeholder) downstream action. In mock mode
+the Groups/endpoints are fixtures; outside mock mode the Group list is empty for now.
+
+The FHIR APIs screen needs `TwoStageSelectionTableWidget` from a matching locksmith change
+(locksmith branch `feat-non-sassy-witness`, not yet released). Deploy the two together: against an
+older locksmith the FHIR APIs menu entry stays disabled and the rest of the plugin still loads.
 
 This is UI/UX scaffolding: Onyx owns and will stand up the actual `/udap/onboarding*` servers, so
 remoting hits the real endpoint shapes but short-circuits to canned responses when
