@@ -25,16 +25,16 @@ from locksmith.ui.toolkit.widgets import (
     LocksmithInvertedButton,
     SelectionRevealSection,
 )
-from locksmith.ui.toolkit.widgets.fields import (
-    FloatingLabelComboBox,
-    LocksmithPlainTextEdit,
-)
+from locksmith.ui.toolkit.widgets.fields import FloatingLabelComboBox
 
 from ..core import configing, credentials, devbootstrap, mock_data, presenting, remoting
 from ..db.basing import SignetConnection
 from . import refresh
 
 logger = help.ogler.getLogger(__name__)
+
+# Fixed for the demo; partners are not asked for a redirect URI.
+DEMO_REDIRECT_URI = "https://www.healthkeri.com"
 
 
 class AddConnectionDialog(LocksmithDialog):
@@ -46,7 +46,6 @@ class AddConnectionDialog(LocksmithDialog):
         self._partner_by_id: dict[str, dict] = {}
         self._credential_by_display: dict[str, dict] = {}
         self._credential_selectors: dict[str, FloatingLabelComboBox] = {}
-        self._redirect_inputs: dict[str, LocksmithPlainTextEdit] = {}
         self._is_submitting = False
 
         content_widget = QWidget()
@@ -179,13 +178,6 @@ class AddConnectionDialog(LocksmithDialog):
         self._credential_selectors[partner["connection_id"]] = credential_selector
         self._populate_credential_dropdown(credential_selector)
 
-        redirect_input = LocksmithPlainTextEdit()
-        redirect_input.setPlaceholderText("Redirect URIs, one per line")
-        redirect_input.setFixedWidth(420)
-        redirect_input.setFixedHeight(70)
-        page_layout.addWidget(redirect_input)
-        self._redirect_inputs[partner["connection_id"]] = redirect_input
-
         page.adjustSize()
         return page
 
@@ -221,20 +213,11 @@ class AddConnectionDialog(LocksmithDialog):
             self.show_error("Select a credential to present.")
             return
 
-        redirect_input = self._redirect_inputs.get(connection_id)
-        redirect_uris = [
-            line.strip()
-            for line in (
-                redirect_input.toPlainText() if redirect_input else ""
-            ).splitlines()
-            if line.strip()
-        ]
-
         self._is_submitting = True
         self.submit_btn.setEnabled(False)
         self.submit_btn.setText("Adding...")
         self.clear_error()
-        self._do_submit(partner, credential, redirect_uris)
+        self._do_submit(partner, credential, [DEMO_REDIRECT_URI])
 
     @qasync.asyncSlot()
     async def _do_submit(
@@ -336,4 +319,4 @@ class AddConnectionDialog(LocksmithDialog):
             on_success=self.on_success,
             parent=self.parent(),
         )
-        dialog.show()
+        dialog.open()

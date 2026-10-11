@@ -33,6 +33,19 @@ from .status import STATUS_DISPLAY, format_expiry
 
 logger = help.ogler.getLogger(__name__)
 
+_DEFAULT_ICON = ":/assets/material-icons/p2p.svg"
+
+
+def _header_icon(connection) -> str:
+    """Partner logo once registered (same rule as the list rows), else the p2p icon."""
+    if (
+        connection is not None
+        and connection.status == "registered"
+        and connection.logo_icon_path
+    ):
+        return connection.logo_icon_path
+    return _DEFAULT_ICON
+
 
 class ViewConnectionDialog(LocksmithDialog):
     """Read-only view of a signet connection with one status-dependent action button."""
@@ -67,7 +80,7 @@ class ViewConnectionDialog(LocksmithDialog):
         super().__init__(
             parent=parent,
             title=display_name,
-            title_icon=":/assets/material-icons/p2p.svg",
+            title_icon=_header_icon(connection),
             content=content_widget,
             buttons=self.button_row,
         )
@@ -109,6 +122,7 @@ class ViewConnectionDialog(LocksmithDialog):
             return
 
         self.set_title(connection.display_name)
+        self.set_title_icon(_header_icon(connection))
 
         self.content_layout.addSpacing(20)
         info_label = QLabel("Connection Information:")
@@ -236,7 +250,7 @@ class ViewConnectionDialog(LocksmithDialog):
             on_success=self._on_dcr_success,
             parent=self.parent(),
         )
-        dialog.show()
+        dialog.open()
 
     def _on_dcr_success(self):
         self._build_content()
