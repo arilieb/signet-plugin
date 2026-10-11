@@ -25,7 +25,7 @@ DISCOVERABLE_CONNECTIONS: list[Dict[str, Any]] = [
     {
         "connection_id": "onyx-demo",
         "display_name": "Onyx",
-        "logo_icon_path": ":/assets/material-icons/identity_platform.svg",
+        "logo_icon_path": ":/assets/custom/logos/onyx-logo-black.png",
         "base_url": ONYX_BASE_URL,
         "purpose": "treatment",
     },
@@ -128,7 +128,7 @@ def discoverable_connections() -> list[Dict[str, Any]]:
             {
                 "connection_id": "local-echelon",
                 "display_name": "Local Echelon",
-                "logo_icon_path": ":/assets/material-icons/identity_platform.svg",
+                "logo_icon_path": ":/assets/custom/logos/onyx-logo-black.png",
                 "base_url": configing.partner_url(),
                 "purpose": "TREAT",
             }
