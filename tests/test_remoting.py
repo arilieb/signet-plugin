@@ -122,6 +122,7 @@ async def test_discover_server(monkeypatch):
         "success": True,
         "onboarding_endpoint": "http://s/udap/onboarding",
         "aid": "Esrv",
+        "registration_endpoint": "",
         "token_endpoint": "",
     }
 
@@ -307,6 +308,7 @@ async def test_discover_keri_url_fetched_as_is(monkeypatch):
         "success": True,
         "onboarding_endpoint": KERI_DOC["onboarding_endpoint"],
         "aid": "Esrv",
+        "registration_endpoint": "",
         "token_endpoint": "https://api.example.io/token",
     }
 
@@ -492,3 +494,102 @@ async def test_poll_url_not_rebased_without_override_or_for_udap(monkeypatch):
     )
     monkeypatch.setenv("SIGNET_ONBOARDING_ENDPOINT", OVERRIDE)
     assert remoting._rebase_poll_url("http://s", "http://s/p/1") == "http://s/p/1"
+
+
+KERI_DCR_DOC = {
+    **KERI_DOC,
+    "registration_endpoint": "https://api.example.io/slapv3/keri/register/",
+}
+
+
+async def test_discover_keri_returns_registration_endpoint(monkeypatch):
+    _patch(monkeypatch, lambda req: httpx.Response(200, json=KERI_DCR_DOC))
+    r = await remoting.discover_server(KERI_URL)
+    assert r["registration_endpoint"] == KERI_DCR_DOC["registration_endpoint"]
+    assert r["token_endpoint"] == KERI_DOC["token_endpoint"]
+
+
+async def test_discover_json_overrides_win(monkeypatch):
+    monkeypatch.setenv("SIGNET_ONBOARDING_FORMAT", "json")
+    monkeypatch.setenv("SIGNET_REGISTRATION_ENDPOINT", "http://o/register/")
+    monkeypatch.setenv("SIGNET_TOKEN_ENDPOINT", "http://o/token/")
+    _patch(monkeypatch, lambda req: httpx.Response(200, json=KERI_DCR_DOC))
+    r = await remoting.discover_server(KERI_URL)
+    assert r["registration_endpoint"] == "http://o/register/"
+    assert r["token_endpoint"] == "http://o/token/"
+
+
+async def test_discover_cesr_ignores_dcr_overrides(monkeypatch):
+    monkeypatch.delenv("SIGNET_ONBOARDING_FORMAT", raising=False)
+    monkeypatch.setenv("SIGNET_REGISTRATION_ENDPOINT", "http://o/register/")
+    monkeypatch.setenv("SIGNET_TOKEN_ENDPOINT", "http://o/token/")
+    _patch(monkeypatch, lambda req: httpx.Response(200, json=KERI_DCR_DOC))
+    r = await remoting.discover_server(KERI_URL)
+    assert r["registration_endpoint"] == KERI_DCR_DOC["registration_endpoint"]
+    assert r["token_endpoint"] == KERI_DOC["token_endpoint"]
+
+
+async def test_register_to_explicit_url(monkeypatch):
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(201, json={"client_id": "C", "scope": "system/Group.read"})
+
+    _patch(monkeypatch, handler)
+    r = await remoting.register_dynamic_client(
+        KERI_URL, {"purpose": "TREAT"}, url="http://s/slapv3/keri/register/"
+    )
+    assert seen == ["http://s/slapv3/keri/register/"]
+    assert r["success"] and r["scopes"] == "system/Group.read"
+
+
+async def test_register_200_succeeds_only_in_json_format(monkeypatch):
+    _patch(
+        monkeypatch,
+        lambda req: httpx.Response(200, json={"client_id": "C", "scope": "s"}),
+    )
+    monkeypatch.delenv("SIGNET_ONBOARDING_FORMAT", raising=False)
+    r = await remoting.register_dynamic_client("http://s", {})
+    assert not r["success"] and r["status_code"] == 200
+
+    monkeypatch.setenv("SIGNET_ONBOARDING_FORMAT", "json")
+    r = await remoting.register_dynamic_client("http://s", {})
+    assert r["success"] and r["client_id"] == "C"
+
+
+async def test_register_201_succeeds_in_json_format(monkeypatch):
+    monkeypatch.setenv("SIGNET_ONBOARDING_FORMAT", "json")
+    _patch(monkeypatch, lambda req: httpx.Response(201, json={"client_id": "C"}))
+    r = await remoting.register_dynamic_client("http://s", {})
+    assert r["success"] and r["scopes"] == ""
+
+
+async def test_register_unapproved_error_includes_layer_and_review(monkeypatch):
+    _patch(
+        monkeypatch,
+        lambda req: httpx.Response(
+            400,
+            json={
+                "error": "unapproved_software_statement",
+                "failed_layer": "aid_purpose",
+                "review_endpoint": "http://s/review/1",
+            },
+        ),
+    )
+    r = await remoting.register_dynamic_client("http://s", {})
+    assert not r["success"]
+    assert r["error"] == (
+        "unapproved_software_statement "
+        "(failed layer: aid_purpose; review: http://s/review/1)"
+    )
+
+
+async def test_register_logs_elide_grant(monkeypatch):
+    logged = []
+    monkeypatch.setattr(remoting, "_log_request", lambda *a: logged.append(a))
+    _patch(monkeypatch, lambda req: httpx.Response(201, json={"client_id": "C"}))
+    await remoting.register_dynamic_client(
+        "http://s", {"ipex_grant": "X" * 50, "purpose": "TREAT"}
+    )
+    assert "50 chars omitted" in logged[0][3] and "XXXX" not in logged[0][3]

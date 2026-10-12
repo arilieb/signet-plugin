@@ -76,7 +76,10 @@ async def authenticate_connection(vault, db, connection_id: str) -> dict:
     except presenting.PresentingError as exc:
         return {"success": False, "error": str(exc)}
 
-    result = await remoting.request_access_token(token_endpoint, client_id, assertion)
+    scope = connection.scopes if configing.is_json_format() else ""
+    result = await remoting.request_access_token(
+        token_endpoint, client_id, assertion, scope
+    )
     if not result.get("success"):
         return {
             "success": False,

@@ -1,3 +1,4 @@
+import pytest
 from locksmith.core.configing import Environments, LocksmithConfig
 
 from signet.core import configing, credentials, devbootstrap, mock_data
@@ -122,3 +123,39 @@ def test_omit_ipex_grant(monkeypatch):
         assert configing.omit_ipex_grant()
     monkeypatch.setenv("SIGNET_ONBOARDING_OMIT_GRANT", "0")
     assert not configing.omit_ipex_grant()
+
+
+def test_onboarding_oobi_override(monkeypatch):
+    monkeypatch.delenv("SIGNET_ONBOARDING_OOBI", raising=False)
+    assert configing.onboarding_oobi_override() == []
+    monkeypatch.setenv("SIGNET_ONBOARDING_OOBI", " https://a/oobi/E1 , ,https://b/oobi/E1 ")
+    assert configing.onboarding_oobi_override() == [
+        "https://a/oobi/E1",
+        "https://b/oobi/E1",
+    ]
+
+
+def test_is_json_format(monkeypatch):
+    monkeypatch.delenv("SIGNET_ONBOARDING_FORMAT", raising=False)
+    assert not configing.is_json_format()
+    monkeypatch.setenv("SIGNET_ONBOARDING_FORMAT", "cesr")
+    assert not configing.is_json_format()
+    monkeypatch.setenv("SIGNET_ONBOARDING_FORMAT", " JSON ")
+    assert configing.is_json_format()
+
+
+@pytest.mark.parametrize(
+    "reader,var",
+    [
+        (configing.registration_endpoint_override, "SIGNET_REGISTRATION_ENDPOINT"),
+        (configing.token_endpoint_override, "SIGNET_TOKEN_ENDPOINT"),
+        (configing.dcr_oobi_override, "SIGNET_DCR_OOBI"),
+    ],
+)
+def test_dcr_env_readers(monkeypatch, reader, var):
+    monkeypatch.delenv(var, raising=False)
+    assert reader() == ""
+    monkeypatch.setenv(var, "   ")
+    assert reader() == ""
+    monkeypatch.setenv(var, " http://x/y ")
+    assert reader() == "http://x/y"

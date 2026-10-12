@@ -28,10 +28,13 @@ from keri import help
 
 from . import mock_data
 from .configing import (
+    is_json_format,
     is_keri_discovery_url,
     is_mock_mode,
     onboarding_endpoint_override,
     onboarding_server_aid,
+    registration_endpoint_override,
+    token_endpoint_override,
 )
 from .presenting import ASSERTION_TYPE
 
@@ -41,12 +44,14 @@ _TIMEOUT = 30.0
 
 
 def _loggable_body(content_type: str, body: bytes) -> str:
-    """Request body for the log: a JSON packet with its (large) ``ipex_grant`` elided."""
+    """Request body for the log: a JSON packet with its (large) ``ipex_grant`` / ``software_statement`` elided."""
     if "json" in content_type:
         try:
             packet = json.loads(body)
-            if isinstance(packet, dict) and "ipex_grant" in packet:
-                packet["ipex_grant"] = f"<{len(packet['ipex_grant'])} chars omitted>"
+            if isinstance(packet, dict):
+                for key in ("ipex_grant", "software_statement"):
+                    if key in packet:
+                        packet[key] = f"<{len(packet[key])} chars omitted>"
             return json.dumps(packet)
         except ValueError:
             pass
@@ -111,6 +116,13 @@ def _error_result(response: httpx.Response) -> Dict[str, Any]:
         or data.get("error")
         or f"API error: {response.status_code}"
     )
+    details = [
+        f"{label}: {data[key]}"
+        for key, label in (("failed_layer", "failed layer"), ("review_endpoint", "review"))
+        if data.get(key)
+    ]
+    if details:
+        description = f"{description} ({'; '.join(details)})"
     correlation_id = data.get("correlation_id") or response.headers.get(
         "Correlation-ID", ""
     )
@@ -175,8 +187,10 @@ async def discover_server(base_url: str) -> Dict[str, Any]:
     (a workaround for a document that advertises the wrong one).
 
     Fails if the server does not advertise onboarding (legacy mode).
-    ``token_endpoint`` is returned when advertised ("" otherwise): onboarding
-    does not need it, Authenticate does.
+    ``registration_endpoint`` and ``token_endpoint`` are returned when advertised
+    ("" otherwise): onboarding needs neither, DCR and Authenticate do. With
+    SIGNET_ONBOARDING_FORMAT=json, SIGNET_REGISTRATION_ENDPOINT and
+    SIGNET_TOKEN_ENDPOINT replace the advertised values.
     """
     if is_mock_mode():
         return mock_data.mock_discover_server(base_url)
@@ -203,11 +217,27 @@ async def discover_server(base_url: str) -> Dict[str, Any]:
                 "success": False,
                 "error": "Server does not offer onboarding.",
             }
+        registration_endpoint = data.get("registration_endpoint") or ""
+        token_endpoint = data.get("token_endpoint") or ""
+        if is_json_format():
+            if registration_endpoint_override():
+                logger.info(
+                    f"Overriding advertised registration endpoint {registration_endpoint} "
+                    f"with {registration_endpoint_override()}"
+                )
+                registration_endpoint = registration_endpoint_override()
+            if token_endpoint_override():
+                logger.info(
+                    f"Overriding advertised token endpoint {token_endpoint} "
+                    f"with {token_endpoint_override()}"
+                )
+                token_endpoint = token_endpoint_override()
         return {
             "success": True,
             "onboarding_endpoint": endpoint,
             "aid": aid,
-            "token_endpoint": data.get("token_endpoint") or "",
+            "registration_endpoint": registration_endpoint,
+            "token_endpoint": token_endpoint,
         }
     except Exception as e:
         logger.error(f"Error discovering server metadata: {e}")
@@ -282,23 +312,34 @@ async def poll_onboarding(
 
 
 async def register_dynamic_client(
-    base_url: str, registration: Dict[str, Any]
+    base_url: str, registration: Dict[str, Any], url: str = ""
 ) -> Dict[str, Any]:
     """
-    POST {base_url}/register -- UDAP Dynamic Client Registration (ONBOARDING.md S4.4).
+    POST ``url`` (default {base_url}/register) -- UDAP Dynamic Client Registration
+    (ONBOARDING.md S4.4).
 
     ``registration`` is the body from presenting.build_dcr_request. 201 Created
-    returns the client (also for a repeated registration); errors keep the
-    server's RFC 7591 ``error`` code and ``correlation_id``.
+    returns the client (also for a repeated registration); with
+    SIGNET_ONBOARDING_FORMAT=json a repeated registration is 200 and also succeeds.
+    Errors keep the server's RFC 7591 ``error`` code and ``correlation_id``.
     """
     if is_mock_mode():
         return mock_data.mock_register_dynamic_client(registration)
 
     try:
+        url = url or f"{base_url}/register"
+        headers = {"Content-Type": "application/json"}
+        _log_request(
+            "POST",
+            url,
+            headers,
+            _loggable_body("application/json", json.dumps(registration).encode()),
+        )
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            response = await client.post(f"{base_url}/register", json=registration)
+            response = await client.post(url, json=registration)
+        _log_response(response)
 
-        if response.status_code == 201:
+        if response.status_code in ((200, 201) if is_json_format() else (201,)):
             data = response.json()
             scopes = data.get("scope", data.get("scopes"))
             if isinstance(scopes, list):

@@ -56,9 +56,13 @@ By default `LOCKSMITH_ENVIRONMENT=development` runs signet in mock mode (canned 
 | `SIGNET_LIVE=1` | Live dev mode (only honored when `LOCKSMITH_ENVIRONMENT=development`) |
 | `SIGNET_REGISTRAR_URL` | Registrar hosting the credential chain, e.g. `http://127.0.0.1:8080` |
 | `SIGNET_PARTNER_URL` | Local Echelon base URL (default `http://127.0.0.1:8000`), or the full URL of a partner's `.well-known/keri` document (see [Demo against a `.well-known/keri` server](#demo-against-a-well-knownkeri-server)) |
-| `SIGNET_ONBOARDING_FORMAT` | `json` sends the JSON submission packet; anything else (default `cesr`) sends the single CESR grant |
+| `SIGNET_ONBOARDING_FORMAT` | `json` sends the JSON submission packet, whose `ipex_grant` is the full credential chain as one CESR stream ending in the grant exn; anything else (default `cesr`) sends the single CESR grant |
 | `SIGNET_ONBOARDING_ENDPOINT` | Replaces the `onboarding_endpoint` advertised by a `.well-known/keri` document (ignored for `.well-known/udap` discovery) |
+| `SIGNET_REGISTRATION_ENDPOINT` | With `SIGNET_ONBOARDING_FORMAT=json`: replaces the `registration_endpoint` advertised by a `.well-known/keri` document (ignored otherwise) |
+| `SIGNET_TOKEN_ENDPOINT` | With `SIGNET_ONBOARDING_FORMAT=json`: replaces the advertised `token_endpoint` (ignored otherwise) |
+| `SIGNET_DCR_OOBI` | With `SIGNET_ONBOARDING_FORMAT=json`: single OOBI URL sent as `oobi` in the registration request instead of the presenter's first witness OOBI |
 | `SIGNET_ONBOARDING_OMIT_GRANT` | `1`/`true` sends the JSON packet without `ipex_grant` (the field is optional server-side while its grant verification is unfinished); the server AID is then not needed |
+| `SIGNET_ONBOARDING_OOBI` | Comma-separated OOBI URLs that replace the witness-derived `legal_entity.oobi` in the JSON packet (e.g. when the witnesses are not reachable from the partner) |
 | `SIGNET_ONBOARDING_SERVER_AID` | AID the grant is addressed to when the discovery document advertises none (`.well-known/keri`) |
 | `SIGNET_CREDENTIAL_SCHEMAS` | Comma-separated schema SAIDs of the credentials offered in Add Connection (default: the LESR schema); written by the issue scripts to `env.out` (the LESR SAID for `issue-chain-lesr.sh`) |
 | `SIGNET_DEV_OOBIS` | Comma-separated extra OOBIs the bootstrap resolves (External, QVI, Practice, and the chain's schema OOBIs); written by `issue-chain-ecr.sh` / `issue-chain-lesr.sh` to `scripts/dev-live/generated/env.out` |
@@ -106,6 +110,8 @@ source scripts/dev-live/generated/env.out
 ```
 so the issuer OOBIs resolve and the pending grants are admitted
 
+With `SIGNET_ONBOARDING_FORMAT=json` the vault must hold all five chain credentials (and the issuer KELs) before Add, since the whole chain is sent. A `PresentingError` naming an incomplete chain means: wait for the grants to be admitted, or restart Locksmith.
+
 #### 5 registrar 
 (own venv; no passcode, matching the keystore)
 ```bash
@@ -131,7 +137,7 @@ Once the connection is approved (green), the DCR gate offers "Proceed": signet b
 
 ### Demo against a `.well-known/keri` server
 
-For a partner that publishes `.../.well-known/keri` (e.g. `https://api-dmdh-dev.safhir.io/slapv3/pdexv2/.well-known/keri`), onboarding POSTs the JSON packet described in `SUBMISSION_SHAPE.md`, with the CESR IPEX grant in `ipex_grant`. In a non-development Locksmith environment:
+For a partner that publishes `.../.well-known/keri` (e.g. `https://api-dmdh-dev.safhir.io/slapv3/pdexv2/.well-known/keri`), onboarding POSTs the JSON packet described in `SUBMISSION_SHAPE.md`, with the full credential chain (issuer KELs, TELs, chained credentials, then the IPEX grant exn) as one CESR stream in `ipex_grant`. In a non-development Locksmith environment:
 
 ```bash
 SIGNET_PARTNER_URL=https://api-dmdh-dev.safhir.io/slapv3/pdexv2/.well-known/keri \
@@ -147,9 +153,11 @@ While the server's grant verification is under construction, set `SIGNET_ONBOARD
 
 Assumptions (adjust once tried against the real server):
 - LEI, QVI LEI, purpose (`TREAT`), scopes and contacts are hardcoded demo values (`presenting.DEMO_*`), and `client_metadata` is `{}`; the redirect URIs from the dialog are ignored.
-- `ipex_grant` is a plain grant (`a = {m, i}`, no `a.udap`). `submitter` carries only `role`; no `ecr_said`/`lesr_said`.
-- `legal_entity.aid` is the chain's Legal Entity AID (the holder AID if none); `oobi` lists its witness `/oobi/{aid}` URLs.
-- No HTTP signature headers; the response is assumed echelon-like (unauthenticated, 202/200 with `onboarding_id` (or `review_id`), `status`, `decision_due`, `Content-Location`). Polling needs a `Content-Location`. Registration and Authenticate are not covered.
+- `ipex_grant` ends in a plain grant exn (`a = {m, i}`, no `a.udap`), preceded by the chain artifacts. `submitter` carries only `role`; no `ecr_said`/`lesr_said`.
+- `legal_entity.aid` is the chain's Legal Entity AID (the holder AID if none); `oobi` lists its witness `/oobi/{aid}` URLs, unless `SIGNET_ONBOARDING_OOBI` overrides them.
+- No HTTP signature headers; the response is assumed echelon-like (unauthenticated, 202/200 with `onboarding_id` (or `review_id`), `status`, `decision_due`, `Content-Location`). Polling needs a `Content-Location`.
+- With `SIGNET_ONBOARDING_FORMAT=json`, Registration (DCR) POSTs to the document's `registration_endpoint` (or `SIGNET_REGISTRATION_ENDPOINT`; mind its trailing slash, Django may redirect a POST without one) the body `{ipex_grant, oobi, purpose, client_name, grant_types: ["client_credentials"]}`: `ipex_grant` is the same plain chain stream as onboarding (fresh `dt` per call, addressed to the server AID), `oobi` is the presenter's first witness OOBI (`SIGNET_DCR_OOBI` overrides), `purpose` is the requested purpose, and no `redirect_uris` are sent. `201` (first registration) and `200` (re-registration) both succeed and return `client_id` and a space-separated `scope`. A `400 unapproved_software_statement` shows its `failed_layer` and `review_endpoint`. The server may key approval by the presenter AID rather than the Legal Entity AID sent at onboarding; if DCR is refused with `aid_purpose`, check which AID the approval recorded.
+- With the same format, Authenticate sends the registered `scope` along with the ACDC `client_assertion` to the advertised `token_endpoint` (or `SIGNET_TOKEN_ENDPOINT`). Known gap: the server has no `acdc_vlei` client authentication yet, so it answers `401 invalid_client`, which is shown as is. Without the json format, DCR and Authenticate are unchanged (`{base_url}/register`, `software_statement`, no `scope`).
 
 ### Authenticate
 

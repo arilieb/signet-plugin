@@ -9,7 +9,9 @@ purposes, contacts and redirect URIs. The sender's exn signature is the only
 signature; the body of POST /udap/onboarding is the raw CESR message.
 
 With SIGNET_ONBOARDING_FORMAT=json the grant is instead wrapped in a JSON
-submission packet (SUBMISSION_SHAPE.md) that carries the metadata itself.
+submission packet (SUBMISSION_SHAPE.md) that carries the metadata itself. Its
+``ipex_grant`` is the whole credential chain as one CESR stream, in the shape
+``kli ipex grant`` sends: KELs, TELs and source credentials, then the grant exn.
 """
 
 import json
@@ -20,8 +22,10 @@ from typing import Any
 from keri import help
 from keri.app import signing
 from keri.core import coring, serdering
+from keri import kering
 from keri.peer import exchanging
 from keri.help import helping
+from keri.vdr import credentialing
 
 from . import configing
 from .credentials import LEGAL_ENTITY_SCHEMA_SAID
@@ -33,7 +37,7 @@ REQUESTED_PURPOSE = "TREAT"
 # Demo values for the JSON submission packet (SUBMISSION_SHAPE.md); not user-entered yet.
 DEMO_LEI = "549300QKBENKLBXQ8968"
 DEMO_QVI_LEI = "254900OPPU84GM83MG36"
-DEMO_SCOPES = ["system/Patient.rs", "system/Group.rs"]
+DEMO_SCOPES = ["system/Group.read"]
 DEMO_TECHNICAL_CONTACT = "interop-eng@healthkeri.com"
 DEMO_SECURITY_CONTACT = "security@healthkeri.com"
 DCR_STATEMENT_TYPE = "urn:ietf:params:oauth:software-statement-type:acdc-vlei"
@@ -119,6 +123,84 @@ def _build_grant_message(
     return msg
 
 
+class _ChainCollector:
+    """
+    Duck-typed stand-in for keripy's ``StreamPoster`` that concatenates messages
+    into one CESR stream. Messages whose SAID was already emitted are skipped, which
+    de-dupes the KELs and TELs shared between credentials of a chain.
+    """
+
+    def __init__(self):
+        self.stream = bytearray()
+        self._seen: set[str] = set()
+
+    def send(self, serder, attachment=None):
+        if serder.said in self._seen:
+            return
+        self._seen.add(serder.said)
+        self.stream.extend(serder.raw)
+        if attachment:
+            self.stream.extend(attachment)
+
+
+def _chain_sources(vault, creder) -> list[tuple[Any, bytes]]:
+    """
+    Credentials reachable through ``creder``'s edges as ``(creder, attachment)``,
+    dependencies before dependents (post-order), each once.
+
+    Unlike ``Reger.sources`` (pre-order) this lets the server verify each credential
+    without relying on its missing-chain escrow.
+    """
+    reger = vault.rgy.reger
+    seen: set[str] = {creder.said}
+    ordered: list[tuple[Any, bytes]] = []
+
+    def visit(node):
+        for key, edge in (node.edge or {}).items():
+            if key == "d" or not isinstance(edge, dict) or not edge.get("n"):
+                continue
+            said = edge["n"]
+            if said in seen:
+                continue
+            seen.add(said)
+            source, prefixer, seqner, saider = reger.cloneCred(said=said)
+            visit(source)
+            atc = signing.serialize(source, prefixer, seqner, saider)[source.size :]
+            ordered.append((source, atc))
+
+    visit(creder)
+    return ordered
+
+
+def _build_chain_stream(vault, hab, server_aid: str, credential_said: str) -> bytearray:
+    """
+    CESR stream of the full credential chain of ``credential_said``, as ``kli ipex
+    grant`` sends it: issuer KELs and TELs, every chained source credential with its
+    own artifacts, then the root's artifacts and the ``/ipex/grant`` exn last.
+
+    Fails fast with ``PresentingError`` when the vault lacks any chain member, its
+    TEL or an issuer KEL.
+    """
+    reger = vault.rgy.reger
+    collector = _ChainCollector()
+    try:
+        creder = reger.cloneCred(said=credential_said)[0]
+        for source, atc in _chain_sources(vault, creder):
+            credentialing.sendArtifacts(vault.hby, reger, collector, source, server_aid)
+            collector.send(source, attachment=atc)
+        credentialing.sendArtifacts(vault.hby, reger, collector, creder, server_aid)
+    except (KeyError, kering.MissingEntryError, AttributeError) as exc:
+        raise PresentingError(
+            f"The credential chain of {credential_said} is incomplete in the vault "
+            f"(missing {exc}); wait for all grants to be admitted and the issuer "
+            "OOBIs to resolve."
+        )
+
+    stream = collector.stream
+    stream.extend(_build_grant_message(vault, hab, server_aid, credential_said, None))
+    return stream
+
+
 def build_dcr_request(
     vault,
     connection,
@@ -133,7 +215,12 @@ def build_dcr_request(
     ``exchanging.exchange`` and endorsed with ``last=False`` (the server only
     processes transferable ``tsgs`` groups). Built fresh per call: ``dt`` is
     the server's replay guard.
+
+    With SIGNET_ONBOARDING_FORMAT=json this is ``build_dcr_request_json`` instead.
     """
+    if configing.is_json_format():
+        return build_dcr_request_json(vault, connection)
+
     hab = vault.hby.habs.get(connection.hab_aid)
     if hab is None:
         raise PresentingError("The presenting identifier is not in this vault.")
@@ -170,6 +257,54 @@ def build_dcr_request(
     }
 
 
+def build_dcr_request_json(vault, connection) -> dict[str, Any]:
+    """
+    Body of POST {registration_endpoint} in the json format: the credential chain as
+    a plain ``ipex_grant`` stream (as in the onboarding packet), the presenter's
+    witness ``oobi``, and the client metadata at top level (no ``a.udap``).
+
+    ``purpose`` is ``REQUESTED_PURPOSE`` rather than ``connection.purpose``: approval is
+    keyed by (AID, purpose) and onboarding sent ``REQUESTED_PURPOSE``. ``redirect_uris``
+    are not sent. Built fresh per call: ``dt`` is the server's replay guard.
+    """
+    hab = vault.hby.habs.get(connection.hab_aid)
+    if hab is None:
+        raise PresentingError("The presenting identifier is not in this vault.")
+    said = connection.selected_credential_said
+    if not said:
+        raise PresentingError("The connection has no credential.")
+    server_aid = connection.server_aid or configing.onboarding_server_aid()
+    if not server_aid:
+        raise PresentingError(
+            "The grant must be addressed to the server, but its AID is unknown "
+            "(set SIGNET_ONBOARDING_SERVER_AID)."
+        )
+
+    oobi = configing.dcr_oobi_override()
+    if not oobi:
+        urls = witness_oobi_urls(hab)
+        if not urls:
+            raise PresentingError(
+                f"Identifier {hab.pre} has no witness to host its key state."
+            )
+        oobi = urls[0]
+
+    try:
+        grant = _build_chain_stream(vault, hab, server_aid, said)
+    except PresentingError:
+        raise
+    except Exception as exc:
+        raise PresentingError(f"Unable to build the registration request: {exc}")
+
+    return {
+        "ipex_grant": grant.decode("utf-8"),
+        "oobi": oobi,
+        "purpose": REQUESTED_PURPOSE,
+        "client_name": connection.client_name,
+        "grant_types": ["client_credentials"],
+    }
+
+
 def build_token_assertion(vault, connection) -> str:
     """
     ``client_assertion`` for POST /token (``client_credentials``): the same IPEX
@@ -181,14 +316,17 @@ def build_token_assertion(vault, connection) -> str:
     hab = vault.hby.habs.get(connection.hab_aid)
     if hab is None:
         raise PresentingError("The presenting identifier is not in this vault.")
-    if not connection.selected_credential_said or not connection.server_aid:
+    server_aid = connection.server_aid
+    if configing.is_json_format():
+        server_aid = server_aid or configing.onboarding_server_aid()
+    if not connection.selected_credential_said or not server_aid:
         raise PresentingError("The connection has no credential or server AID.")
 
     try:
         msg = _build_grant_message(
             vault,
             hab,
-            connection.server_aid,
+            server_aid,
             connection.selected_credential_said,
             {},
         )
@@ -244,8 +382,9 @@ def build_oobis(
 ) -> list[dict[str, str]]:
     """
     Typed oobis array: key-state OOBIs for the signer and the Legal Entity, plus the
-    credential chain URL. Issuer KELs above the LE (QVI, GLEIF) are the server's trust
-    roots and come from its config, not the request.
+    credential chain URL. In the cesr format, issuer KELs above the LE (QVI, GLEIF) are the
+    server's trust roots and come from its config, not the request; the json format
+    sends them in the ``ipex_grant`` chain stream.
     """
     oobis = [
         {"type": "aid", "aid": hab.pre, "url": url} for url in witness_oobi_urls(hab)
@@ -354,7 +493,9 @@ def build_onboarding_packet(
 ) -> OnboardingRequest:
     """
     Build the JSON submission packet (SUBMISSION_SHAPE.md) for ``credential``: a JSON
-    envelope carrying the CESR IPEX grant as ``ipex_grant``.
+    envelope carrying the credential chain as ``ipex_grant``: one CESR stream of the
+    issuer KELs, TELs and chained credentials (``_build_chain_stream``) ending in the
+    IPEX grant exn.
 
     The grant is plain (``a`` is ``{m, i}``, no ``a.udap``) since the packet carries
     the metadata. Built fresh per call: ``dt`` is the server's replay guard.
@@ -362,6 +503,9 @@ def build_onboarding_packet(
     With SIGNET_ONBOARDING_OMIT_GRANT the grant is neither built nor sent (the server
     field is optional while its grant verification is unfinished), so no server AID is
     needed either.
+
+    SIGNET_ONBOARDING_OOBI (comma-separated) replaces the witness-derived
+    ``legal_entity.oobi`` list.
     """
     if configing.is_mock_mode():
         return OnboardingRequest(
@@ -391,7 +535,7 @@ def build_onboarding_packet(
         )
 
     le_aid = legal_entity_aid(vault, said) or hab.pre
-    oobis = witness_oobi_urls(hab, le_aid)
+    oobis = configing.onboarding_oobi_override() or witness_oobi_urls(hab, le_aid)
     if not oobis:
         raise PresentingError(
             f"Identifier {le_aid} has no witness to host its key state."
@@ -400,7 +544,7 @@ def build_onboarding_packet(
     grant = None
     if not omit_grant:
         try:
-            grant = _build_grant_message(vault, hab, server_aid, said, None)
+            grant = _build_chain_stream(vault, hab, server_aid, said)
         except PresentingError:
             raise
         except Exception as exc:

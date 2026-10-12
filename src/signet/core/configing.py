@@ -72,6 +72,11 @@ def onboarding_format() -> str:
     )
 
 
+def is_json_format() -> bool:
+    """True when ``onboarding_format`` is ``json``: the single gate for the SLAP-style DCR and token flow."""
+    return onboarding_format() == ONBOARDING_FORMAT_JSON
+
+
 def onboarding_server_aid() -> str:
     """AID the onboarding grant is addressed to when discovery does not advertise one."""
     return os.environ.get("SIGNET_ONBOARDING_SERVER_AID", "").strip()
@@ -88,6 +93,27 @@ def omit_ipex_grant() -> bool:
 def onboarding_endpoint_override() -> str:
     """Onboarding endpoint replacing the one a ``.well-known/keri`` document advertises (SIGNET_ONBOARDING_ENDPOINT)."""
     return os.environ.get("SIGNET_ONBOARDING_ENDPOINT", "").strip()
+
+
+def onboarding_oobi_override() -> list[str]:
+    """OOBIs replacing the witness-derived ``legal_entity.oobi`` of the JSON packet (SIGNET_ONBOARDING_OOBI, comma-separated)."""
+    raw = os.environ.get("SIGNET_ONBOARDING_OOBI", "")
+    return [oobi.strip() for oobi in raw.split(",") if oobi.strip()]
+
+
+def registration_endpoint_override() -> str:
+    """Registration endpoint replacing the advertised one in the json format (SIGNET_REGISTRATION_ENDPOINT)."""
+    return os.environ.get("SIGNET_REGISTRATION_ENDPOINT", "").strip()
+
+
+def token_endpoint_override() -> str:
+    """Token endpoint replacing the advertised one in the json format (SIGNET_TOKEN_ENDPOINT)."""
+    return os.environ.get("SIGNET_TOKEN_ENDPOINT", "").strip()
+
+
+def dcr_oobi_override() -> str:
+    """Single OOBI URL replacing the presenter's witness OOBI in the json DCR body (SIGNET_DCR_OOBI)."""
+    return os.environ.get("SIGNET_DCR_OOBI", "").strip()
 
 
 def registrar_url() -> str:

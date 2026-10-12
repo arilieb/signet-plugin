@@ -25,7 +25,7 @@
     "technical": "{{technicalContact}}",
     "security": "{{securityContact}}"
   },
-  "ipex_grant": "<CESR-encoded IPEX grant>"
+  "ipex_grant": "<CESR stream: chain KELs, TELs and credentials, ending in the IPEX grant exn>"
 }
 ```
 ## Example 
@@ -47,7 +47,7 @@
   "requested_purposes": [
     {
       "purpose": "TREAT",
-      "scopes": ["system/Patient.rs", "system/Group.rs"]
+      "scopes": ["system/Group.read"]
     }
   ],
   "client_metadata": {},
@@ -55,6 +55,19 @@
     "technical": "interop-eng@healthkeri.com",
     "security": "security@healthkeri.com"
   },
-  "ipex_grant": "<CESR-encoded IPEX grant>"
+  "ipex_grant": "<CESR stream: chain KELs, TELs and credentials, ending in the IPEX grant exn>"
 }
 ```
+
+# Dynamic Client Registration (after approval)
+POST to the discovery document's `registration_endpoint` (SLAP: `{baseUrl}/slapv3/keri/register/`), `Content-Type: application/json`. `purpose`, `client_name` and `grant_types` are top level; the grant is plain (no `a.udap`). `ipex_grant` is built like the onboarding one, with a fresh `dt`, and `oobi` is the presenter's own witness OOBI.
+```json
+{
+  "ipex_grant": "<CESR stream: chain KELs, TELs and credentials, ending in the IPEX grant exn>",
+  "oobi": "https://witness.example.org/oobi/EKrM-fvAs-jS2pFTvfr643wFoAoHtidQBpDNSQQTwQHX",
+  "purpose": "TREAT",
+  "client_name": "Onyx",
+  "grant_types": ["client_credentials"]
+}
+```
+`201` on first registration, `200` on re-registration, both with `client_id` and a space-separated `scope`. `400 unapproved_software_statement` carries `failed_layer` and `review_endpoint`.

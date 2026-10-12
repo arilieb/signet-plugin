@@ -73,6 +73,7 @@ async def _confirm(dialog, monkeypatch, token_result, discovery=None, sent=None)
     async def token(endpoint, client_id, assertion, scope=""):
         if sent is not None:
             sent.update(endpoint=endpoint, client_id=client_id)
+            sent["scope"] = scope
         return token_result
 
     monkeypatch.setattr(remoting, "discover_server", discover)
@@ -100,7 +101,11 @@ async def test_authenticate_stores_token_and_sends_pinned_client_id(monkeypatch)
             sent=sent,
         )
         assert not errors
-        assert sent == {"endpoint": "http://srv/token", "client_id": "srv-123"}
+        assert sent == {
+            "endpoint": "http://srv/token",
+            "client_id": "srv-123",
+            "scope": "",
+        }
         conn = db.signet_connections.get(keys=("c1",))
         assert conn.access_token == "tok" and conn.token_scope == "read"
         assert conn.has_valid_token()
@@ -262,5 +267,38 @@ async def test_ensure_authenticated_reauths_when_expired(monkeypatch):
         result = await authenticate.ensure_authenticated(None, db, "c1")
         assert result["success"]
         assert calls == ["discover", "token", "discover", "token"]
+    finally:
+        db.close(clear=True)
+
+
+async def test_authenticate_sends_registered_scopes_in_json_format(monkeypatch):
+    db = _db()
+    try:
+        conn = db.signet_connections.get(keys=("c1",))
+        conn.scopes = "system/Group.read"
+        db.signet_connections.pin(keys=("c1",), val=conn)
+        dialog, errors, _ = _dialog(db)
+        sent = {}
+        monkeypatch.setenv("SIGNET_ONBOARDING_FORMAT", "json")
+        await _confirm(
+            dialog,
+            monkeypatch,
+            {"success": True, "access_token": "tok", "expires_in": 60},
+            sent=sent,
+        )
+        assert not errors
+        assert sent["scope"] == "system/Group.read"
+    finally:
+        db.close(clear=True)
+
+
+async def test_authenticate_surfaces_server_error_in_json_format(monkeypatch):
+    db = _db()
+    try:
+        dialog, errors, _ = _dialog(db)
+        monkeypatch.setenv("SIGNET_ONBOARDING_FORMAT", "json")
+        await _confirm(dialog, monkeypatch, {"success": False, "error": "invalid_client"})
+        assert errors == ["invalid_client"]
+        assert db.signet_connections.get(keys=("c1",)).access_token == ""
     finally:
         db.close(clear=True)
