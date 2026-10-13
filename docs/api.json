@@ -1,0 +1,162 @@
+{
+  "resourceType": "CapabilityStatement",
+  "id": "pvav2",
+  "meta": {
+    "versionId": "1",
+    "lastUpdated": "2026-06-16T18:01:31.659+00:00"
+  },
+  "url": "https://hl7.org/fhir/us/davinci-pdex/CapabilityStatement/pdex-provider-access-server",
+  "version": "2.2.0",
+  "name": "ProviderAccessVersion2",
+  "title": "Provider Access Version 2 Capability Statement",
+  "status": "active",
+  "experimental": false,
+  "date": "2026-06-01",
+  "publisher": "HL7 International / Financial Management",
+  "contact": [
+    {
+      "name": "HL7 International / Financial Management",
+      "telecom": [
+        {
+          "system": "url",
+          "value": "http://www.hl7.org/Special/committees/fm"
+        },
+        {
+          "system": "email",
+          "value": "fm@lists.HL7.org"
+        }
+      ]
+    }
+  ],
+  "description": "This Section describes the expected capabilities of the DaVinci PDex Provider Access Server hosted by the Host Plan. The server supports asynchronous `$provider-member-match` (HRex-derived) and `$davinci-data-export` operations on the Group resource to enable provider access to member clinical data via PDex.",
+  "jurisdiction": [
+    {
+      "coding": [
+        {
+          "system": "urn:iso:std:iso:3166",
+          "code": "US"
+        }
+      ]
+    }
+  ],
+  "kind": "requirements",
+  "fhirVersion": "4.0.1",
+  "format": [
+    "json"
+  ],
+  "patchFormat": [
+    "application/json-patch+json"
+  ],
+  "implementationGuide": [
+    "http://hl7.org/fhir/us/davinci-pdex/ImplementationGuide/hl7.fhir.us.davinci-pdex",
+    "http://hl7.org/fhir/us/davinci-hrex/ImplementationGuide/hl7.fhir.us.davinci-hrex"
+  ],
+  "rest": [
+    {
+      "mode": "server",
+      "documentation": "The PDex Provider Access Server (Host Plan) **SHALL**:\n\n1. Support `read` and `search-type` interactions on the Group resource for Provider Access discovery.\n2. Support the `$provider-member-match` operation at the Group type level to asynchronously match a requested member to a Group; the operation returns a Task and exposes a status URL and a response URL for the client to poll and retrieve results.\n3. Support the `$davinci-data-export` operation at the Group instance level to initiate a bulk export of provider-attributed member data; the operation returns a Task and exposes a status URL and a downloadable file URL.\n4. Implement the RESTful behavior according to the FHIR specification for bulk asynchronous access.\n5. Return the following response classes:\n   - (Status 400): invalid parameter\n   - (Status 401/4xx): unauthorized request\n   - (Status 403): insufficient scope\n   - (Status 404): unknown resource\n   - (Status 410): deleted resource.\n6. Support JSON source formats for all interactions.",
+      "security": {
+        "service": [
+          {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/restful-security-service",
+                "version": "2.2",
+                "code": "SMART-on-FHIR",
+                "display": "SMART-on-FHIR"
+              }
+            ],
+            "text": "See http://docs.smarthealthit.org/"
+          }
+        ],
+        "description": "1. Access **SHALL** be controlled using client credentials compliant with SMART-on-FHIR Backend Services (system-level scopes).\n2. A server **SHALL** reject any unauthorized requests by returning an `HTTP 401` unauthorized response code.",
+        "extension": [
+          {
+            "url": "http://fhir-registry.smarthealthit.org/StructureDefinition/oauth-uris",
+            "extension": [
+              {
+                "url": "token",
+                "valueUri": "https://api-dmdh-dev.safhir.io/v1/token/"
+              },
+              {
+                "url": "authorize",
+                "valueUri": "https://api-dmdh-dev.safhir.io/v1/authorize/"
+              }
+            ]
+          }
+        ]
+      },
+      "resource": [
+        {
+          "type": "Group",
+          "supportedProfile": [
+            "http://hl7.org/fhir/us/davinci-atr/StructureDefinition/atr-group",
+            "http://hl7.org/fhir/us/davinci-pdex/StructureDefinition/pdex-provider-group"
+          ],
+          "interaction": [
+            {
+              "code": "search-type",
+              "documentation": "Allows discovery of existing Groups. SHOULD be limited to groups a requestor is permitted to access."
+            },
+            {
+              "code": "read",
+              "documentation": "Allows retrieval of a specific Group resource by id."
+            }
+          ],
+          "searchParam": [
+            {
+              "name": "identifier",
+              "definition": "http://hl7.org/fhir/SearchParameter/Group-identifier",
+              "type": "token",
+              "documentation": "The client **SHALL** provide at least a code value and **MAY** provide both the system and code values.\n\nThe server **SHALL** support both."
+            },
+            {
+              "name": "characteristic",
+              "definition": "http://hl7.org/fhir/SearchParameter/Group-characteristic",
+              "type": "token",
+              "documentation": "A common characteristic of all members of a Group."
+            },
+            {
+              "name": "code",
+              "definition": "http://hl7.org/fhir/SearchParameter/Group-code",
+              "type": "token",
+              "documentation": "Search for Group resources by Group.code (kind of group). Servers **SHALL** support both `multipleOr` and `multipleAnd` semantics on this parameter."
+            }
+          ],
+          "operation": [
+            {
+              "name": "provider-member-match",
+              "definition": "https://build.fhir.org/ig/HL7/davinci-epdx/OperationDefinition-ProviderMemberMatch.json",
+              "documentation": "Type-level asynchronous member match. Client POSTs `Group/$provider-member-match` with a Parameters body containing the requested member demographics, coverage, and consent. Server returns a Task; client polls `Group/provider-member-match-status/{task_id}` and retrieves results from `Group/$provider-member-match/response/{task_id}`."
+            },
+            {
+              "name": "davinci-data-export-v2",
+              "definition": "http://hl7.org/fhir/us/davinci-atr/OperationDefinition/davinci-data-export",
+              "documentation": "Instance-level bulk export. Client calls `Group/{group_id}/$davinci-data-export` to initiate an export Task. Status is polled at `Group/$davinci-data-export/status/{task_id}` and resulting files are downloaded via `download/{token}`."
+            },
+            {
+              "name": "davinci-data-export-status-v2",
+              "definition": "http://hl7.org/fhir/us/davinci-pdex/OperationDefinition/cc-davinci-export-status",
+              "documentation": "Async polling endpoint returned via Content-Location after `$davinci-data-export`. Client GETs `Group/$davinci-data-export/status/{task_id}` to check Task progress and retrieve the export manifest."
+            },
+            {
+              "name": "davinci-data-export-download-v2",
+              "definition": "http://hl7.org/fhir/us/davinci-pdex/OperationDefinition/cc-davinci-export-download",
+              "documentation": "File download endpoint listed in the export manifest. Client GETs `download/{token}` to retrieve a single ndjson file produced by `$davinci-data-export`."
+            },
+            {
+              "name": "provider-member-match-status",
+              "definition": "http://hl7.org/fhir/us/davinci-pdex/OperationDefinition/provider-member-match-status",
+              "documentation": "Async polling endpoint returned via Content-Location after `$provider-member-match`. Client GETs `Group/provider-member-match-status/{task_id}` to check Task progress."
+            },
+            {
+              "name": "provider-member-match-response",
+              "definition": "http://hl7.org/fhir/us/davinci-pdex/OperationDefinition/provider-member-match-response",
+              "documentation": "Result-retrieval endpoint returned by the member-match status manifest. Client GETs `Group/$provider-member-match/response/{task_id}` to fetch matched Group resources."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

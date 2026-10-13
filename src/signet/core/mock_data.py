@@ -13,7 +13,7 @@ from typing import Any, Dict
 from ..db.basing import SignetConnection
 from . import configing
 
-ONYX_BASE_URL = "https://onyx.example.com"
+ONYX_BASE_URL = "http://127.0.0.1:8080"
 CAMBIA_BASE_URL = "https://cambia.example.com"
 MERIDIAN_BASE_URL = "https://meridian.example.com"
 
@@ -196,11 +196,11 @@ FHIR_GROUPS: dict[str, list[Dict[str, str]]] = {
 }
 
 
-def fhir_groups(connection_id: str) -> list[Dict[str, str]]:
+def fhir_groups(connection_id: str) -> Dict[str, list]:
     """Groups offered for a connection: fixtures in mock mode, none otherwise."""
     if not configing.is_mock_mode():
-        return []
-    return list(FHIR_GROUPS.get(connection_id, []))
+        return dict(groups=[])
+    return {"groups": list(FHIR_GROUPS.get(connection_id, []))}
 
 
 def fhir_endpoints(connection_id: str, group_id: str) -> list[Dict[str, Any]]:
@@ -239,3 +239,7 @@ def fhir_endpoints(connection_id: str, group_id: str) -> list[Dict[str, Any]]:
             "Purpose": "TREAT",
         },
     ]
+
+
+def mock_groups():
+    return []

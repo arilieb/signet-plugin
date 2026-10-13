@@ -2,52 +2,34 @@
 """
 signet.fhir.list module
 
-FHIR APIs page -- a two-stage selector (registered connection -> Group ID)
-over a table of that Group's FHIR endpoints. Clicking a row runs an invisible
+FHIR APIs page -- progressive disclosure with Connection and Group dropdowns
+above a table of FHIR endpoints. Clicking a row runs an invisible
 authentication pre-check against the selected connection (reusing a still-valid
 token); only on success does the (future) downstream action run.
 """
 
+import json
 from typing import Any
 
 import qasync
-from PySide6.QtCore import QSize
-from PySide6.QtGui import QGuiApplication, QIcon
-from PySide6.QtWidgets import QLabel
+from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 from keri import help
 
-from locksmith.ui.toolkit.tables import TwoStageSelectionTableWidget
+from locksmith.ui import colors
+from locksmith.ui.toolkit.tables import PaginatedTableWidget
+from locksmith.ui.toolkit.widgets.fields import FloatingLabelComboBox
 from locksmith.ui.toolkit.widgets.page import LocksmithFormPage, guarded
+from signet.core import remoting
 
 from ..connections.authenticate import ensure_authenticated
-from ..core import mock_data
 
 logger = help.ogler.getLogger(__name__)
 
 _API_ICON = ":/assets/material-icons/api.svg"
-_STAGE1_TEXT = "Select a currently active connection from the dropdown"
-_STAGE1_NONE_TEXT = (
-    "No active connections. Register a connection on the Connections page."
+_INTRO_TEXT = "To get started with PDex Member Match, select a connection from the dropdown below."
+_NO_CONNECTIONS_TEXT = (
+    "No active connections available. Register a connection on the Connections page."
 )
-_STAGE2_TEXT = "Select a Group ID from the dropdown"
-_LOGO_SIZE = 96
-
-
-def _icon_label(icon_path: str) -> QLabel | None:
-    """A QLabel showing ``icon_path`` (a resource path), or None if empty/unloadable."""
-    if not icon_path:
-        return None
-    icon = QIcon(icon_path)
-    if icon.isNull():
-        return None
-    # Rasterize the (vector) icon at the screen's native pixel density rather
-    # than upscaling a small pixmap, which blurs.
-    screen = QGuiApplication.primaryScreen()
-    ratio = screen.devicePixelRatio() if screen else 1.0
-    pixmap = icon.pixmap(QSize(_LOGO_SIZE, _LOGO_SIZE), ratio)
-    label = QLabel()
-    label.setPixmap(pixmap)
-    return label
 
 
 class FhirApisListPage(LocksmithFormPage):
@@ -57,35 +39,71 @@ class FhirApisListPage(LocksmithFormPage):
         self.app = app
         self._parent = parent
         self._authenticating = False
+        self._connection_by_id: dict[str, Any] = {}
+        self._group_by_id: dict[str, dict] = {}
 
         super().__init__(
-            title="FHIR APIs",
+            title="DaVinci Data Export",
             icon_path=_API_ICON,
             parent=parent,
-            show_header=False,
             banner_position="bottom",
         )
         self._setup_ui()
 
     def _setup_ui(self):
         self.content_layout.setContentsMargins(0, 0, 0, 0)
-        self.table = TwoStageSelectionTableWidget(
+        self.content_layout.setSpacing(12)
+
+        # Container for dropdowns
+        self._selector_container = QWidget()
+        selector_layout = QVBoxLayout(self._selector_container)
+        selector_layout.setContentsMargins(16, 16, 16, 0)
+        selector_layout.setSpacing(12)
+
+        # Intro text
+        self._intro_label = QLabel(_INTRO_TEXT)
+        self._intro_label.setWordWrap(True)
+        self._intro_label.setStyleSheet(
+            f"font-size: 14px; color: {colors.TEXT_SUBTLE};"
+        )
+        selector_layout.addWidget(self._intro_label)
+
+        # Connection dropdown
+        self._connection_selector = FloatingLabelComboBox(label_text="Connection")
+        self._connection_selector.setFixedWidth(400)
+        self._connection_selector.currentIndexChanged.connect(
+            self._on_connection_changed
+        )
+        selector_layout.addWidget(self._connection_selector)
+
+        # Group dropdown (initially hidden)
+        self._group_selector = FloatingLabelComboBox(label_text="Group ID")
+        self._group_selector.setFixedWidth(400)
+        self._group_selector.currentIndexChanged.connect(self._on_group_changed)
+        self._group_selector.hide()
+        selector_layout.addWidget(self._group_selector)
+
+        self.content_layout.addWidget(self._selector_container)
+
+        # Table widget (initially hidden)
+        self.table = PaginatedTableWidget(
             columns=["Resource", "Operation", "Endpoint", "Scope", "Purpose"],
             column_widths={"Resource": 140, "Operation": 120, "Purpose": 100},
-            primary_label="Connection",
-            secondary_label="Group ID",
-            title="FHIR APIs",
+            title="DaVinci Data Export",
+            show_add_button=False,
             icon_path=_API_ICON,
             items_per_page=10,
             parent=self,
         )
-        self.table.primary_changed.connect(self._on_primary_changed)
-        self.table.secondary_changed.connect(self._on_secondary_changed)
         self.table.row_clicked.connect(self._on_row_clicked)
+        self.table.hide()
 
         self.content_layout.addWidget(self.table)
+        self.content_layout.addStretch()
 
-        logger.info("FhirApisListPage initialized with table widget")
+        logger.info(
+            "FhirApisListPage initialized with dropdown selectors and table widget"
+        )
 
     def _get_db(self):
         """Return the signet plugin's LMDB, or None if no vault is open."""
@@ -105,51 +123,104 @@ class FhirApisListPage(LocksmithFormPage):
 
     @guarded("Failed to load FHIR APIs.")
     def on_show(self):
-        """Called when the page becomes visible - restart from stage 1."""
+        """Called when the page becomes visible - reset to initial state."""
         self.clear_error()
+        self._populate_connection_dropdown()
+        # Reset to initial state
+        self._group_selector.hide()
+        self.table.hide()
+
+    def _populate_connection_dropdown(self):
+        """Populate the connection dropdown with registered connections."""
+        self._connection_selector.blockSignals(True)
+        self._connection_selector.clear()
+        self._connection_by_id.clear()
+
         connections = self._registered_connections()
-        self.table.set_primary_options(
-            [
-                (connection.display_name, connection.connection_id)
-                for connection in connections
-            ]
-        )
-        self.table.set_empty_state(
-            1,
-            _STAGE1_TEXT if connections else _STAGE1_NONE_TEXT,
-            _icon_label(_API_ICON),
-        )
-        self.table.reset()
-        self.table.focus_primary()
+        if not connections:
+            self._intro_label.setText(_NO_CONNECTIONS_TEXT)
+            self._connection_selector.setEnabled(False)
+            return
+
+        self._intro_label.setText(_INTRO_TEXT)
+        self._connection_selector.setEnabled(True)
+
+        # Add placeholder item
+        self._connection_selector.addItem("Select a connection...", None)
+
+        for connection in connections:
+            self._connection_by_id[connection.connection_id] = connection
+            self._connection_selector.addItem(
+                connection.display_name, connection.connection_id
+            )
+
+        self._connection_selector.setCurrentIndex(0)
+        self._connection_selector.blockSignals(False)
 
     @guarded("Failed to load Group IDs.")
-    def _on_primary_changed(self, connection_id: Any):
+    @qasync.asyncSlot(int)
+    async def _on_connection_changed(self, index: int):
+        """Handle connection selection change."""
+        connection_id = self._connection_selector.currentData()
         if connection_id is None:
+            # Placeholder selected - hide group selector and table
+            self._group_selector.hide()
+            self.table.hide()
             return
-        db = self._get_db()
-        connection = (
-            db.signet_connections.get(keys=(connection_id,)) if db is not None else None
-        )
-        groups = mock_data.fhir_groups(connection_id)
-        self.table.set_secondary_options(
-            [(group["display_name"], group["group_id"]) for group in groups]
-        )
-        logo = _icon_label(connection.logo_icon_path) if connection else None
-        self.table.set_empty_state(2, _STAGE2_TEXT, logo)
+
+        # Populate groups for selected connection
+        await self._populate_group_dropdown(connection_id)
+        self._group_selector.show()
+        self.table.hide()
+
+    async def _populate_group_dropdown(self, connection_id: str):
+        """Populate the group dropdown for the selected connection."""
+        self._group_selector.blockSignals(True)
+        self._group_selector.clear()
+        self._group_by_id.clear()
+
+        connection = self._connection_by_id[connection_id]
+        response = await remoting.get_groups(connection)
+        groups = response.get("entry", [])
+
+        # Add placeholder item
+        self._group_selector.addItem("Select a group...", None)
+
+        for group in groups:
+            resource = group.get("resource", {})
+            self._group_by_id[resource["id"]] = group
+            self._group_selector.addItem(resource["name"], resource["id"])
+
+        self._group_selector.setCurrentIndex(0)
+        self._group_selector.blockSignals(False)
 
     @guarded("Failed to load FHIR endpoints.")
-    def _on_secondary_changed(self, group_id: Any):
-        connection_id = self.table.primary_data()
-        if connection_id is None or group_id is None:
+    @qasync.asyncSlot(int)
+    async def _on_group_changed(self, index: int):
+        """Handle group selection change."""
+        group_id = self._group_selector.currentData()
+        if group_id is None:
+            # Placeholder selected - hide table
+            self.table.hide()
             return
-        self.table.set_static_data(mock_data.fhir_endpoints(connection_id, group_id))
+
+        connection_id = self._connection_selector.currentData()
+        if connection_id is None:
+            return
+
+        connection = self._connection_by_id[connection_id]
+        response = await remoting.davinci_data_export(connection, group_id)
+        print(json.dumps(response, indent=2))
+        # Load and display FHIR endpoints
+        self.table.set_static_data([])
+        self.table.show()
 
     @qasync.asyncSlot(object)
     async def _on_row_clicked(self, row_data: Any):
         """Authenticate (or reuse a valid token) before acting on the row."""
         if self._authenticating or not isinstance(row_data, dict):
             return
-        connection_id = self.table.primary_data()
+        connection_id = self._connection_selector.currentData()
         db = self._get_db()
         if connection_id is None or db is None:
             return

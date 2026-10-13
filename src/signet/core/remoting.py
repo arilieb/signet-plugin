@@ -241,3 +241,42 @@ async def request_access_token(
     except Exception as e:
         logger.error(f"Error requesting access token: {e}")
         return {"success": False, "error": str(e)}
+
+
+async def get_groups(
+    connection,
+) -> Dict[str, Any]:
+    """
+    GET the onboarding status -- ``poll_url`` (from Content-Location) if known,
+    else {base_url}/udap/onboarding/{onboarding_id}.
+
+    202 means the decision is still pending (non-terminal); 200 means a
+    terminal decision has been made.
+    """
+    try:
+        base_url = connection.base_url
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            response = await client.get(f"{base_url}/Group")
+
+        if response.status_code in (200, 202):
+            return response.json()
+        return _error_result(response)
+    except Exception as e:
+        logger.error(f"Error polling onboarding status: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def davinci_data_export(connection, group_id) -> Dict[str, Any]:
+    try:
+        base_url = connection.base_url
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            response = await client.post(
+                f"{base_url}/Group/{group_id}/$davinci-data-export"
+            )
+
+        if response.status_code in (200, 202):
+            return response.json()
+        return _error_result(response)
+    except Exception as e:
+        logger.error(f"Error polling onboarding status: {e}")
+        return {"success": False, "error": str(e)}
