@@ -85,7 +85,7 @@ class ViewConnectionDialog(LocksmithDialog):
             buttons=self.button_row,
         )
 
-        self.setFixedSize(480, 360)
+        self.setFixedSize(520, 360)
         self.close_btn.clicked.connect(self.close)
 
         self._build_content()

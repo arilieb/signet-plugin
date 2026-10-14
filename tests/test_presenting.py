@@ -238,7 +238,7 @@ def test_build_token_assertion_errors(hab):
             presenting.build_token_assertion(Vault, conn)
 
 
-def _packet_setup(monkeypatch, hab, le_aid=None):
+def _packet_setup(monkeypatch, hab, le=None):
     monkeypatch.setattr(configing, "is_mock_mode", lambda: False)
     acdc, said = _acdc_for(hab.pre)
     monkeypatch.setattr(presenting, "_grant_embeds", lambda vault, s: {"acdc": acdc})
@@ -247,7 +247,7 @@ def _packet_setup(monkeypatch, hab, le_aid=None):
         "_build_chain_stream",
         lambda vault, h, srv, s: presenting._build_grant_message(vault, h, srv, s, None),
     )
-    monkeypatch.setattr(presenting, "legal_entity_aid", lambda v, s: le_aid)
+    monkeypatch.setattr(presenting, "legal_entity_subunit", lambda v, s: le)
     monkeypatch.setattr(
         presenting,
         "witness_oobi_urls",
@@ -259,7 +259,7 @@ def _packet_setup(monkeypatch, hab, le_aid=None):
 def test_build_packet_shape(monkeypatch, hab):
     import json
 
-    said = _packet_setup(monkeypatch, hab, le_aid="Ele")
+    said = _packet_setup(monkeypatch, hab, le=("Ele", "LEI123"))
     req = presenting.build_onboarding_packet(
         _vault(hab, hab.pre),
         {"said": said, "holder_pre": hab.pre, "role": "Data Exchange Representative"},
@@ -280,7 +280,7 @@ def test_build_packet_shape(monkeypatch, hab):
     }
     assert packet["correlation_id"] == req.correlation_id
     assert packet["legal_entity"] == {
-        "lei": presenting.DEMO_LEI,
+        "lei": "LEI123",
         "aid": "Ele",
         "qvi_lei": presenting.DEMO_QVI_LEI,
         "oobi": ["http://w/oobi/Ele"],
@@ -313,7 +313,41 @@ def test_build_packet_le_aid_falls_back_to_hab(monkeypatch, hab):
         "http://s/o",
         "Esrv",
     )
-    assert json.loads(req.body)["legal_entity"]["aid"] == hab.pre
+    legal_entity = json.loads(req.body)["legal_entity"]
+    assert legal_entity["aid"] == hab.pre
+    assert legal_entity["lei"] == presenting.DEMO_LEI
+
+
+def test_build_packet_empty_lei_and_aid_fall_back(monkeypatch, hab):
+    import json
+
+    said = _packet_setup(monkeypatch, hab, le=("", ""))
+    req = presenting.build_onboarding_packet(
+        _vault(hab, hab.pre),
+        {"said": said, "holder_pre": hab.pre},
+        "http://s/o",
+        "Esrv",
+    )
+    legal_entity = json.loads(req.body)["legal_entity"]
+    assert legal_entity["aid"] == hab.pre
+    assert legal_entity["lei"] == presenting.DEMO_LEI
+    assert legal_entity["oobi"] == [f"http://w/oobi/{hab.pre}"]
+
+
+def test_build_packet_oobi_override_wins(monkeypatch, hab):
+    import json
+
+    said = _packet_setup(monkeypatch, hab, le=("Ele", "LEI123"))
+    monkeypatch.setenv("SIGNET_ONBOARDING_OOBI", "http://a/oobi/x, http://b/oobi/x")
+    req = presenting.build_onboarding_packet(
+        _vault(hab, hab.pre),
+        {"said": said, "holder_pre": hab.pre},
+        "http://s/o",
+        "Esrv",
+    )
+    legal_entity = json.loads(req.body)["legal_entity"]
+    assert legal_entity["aid"] == "Ele"
+    assert legal_entity["oobi"] == ["http://a/oobi/x", "http://b/oobi/x"]
 
 
 def test_build_packet_requires_server_aid(monkeypatch, hab):
@@ -363,7 +397,7 @@ def test_build_request_dispatches_on_format(monkeypatch, hab):
 def test_build_packet_omit_grant(monkeypatch, hab):
     import json
 
-    said = _packet_setup(monkeypatch, hab, le_aid="Ele")
+    said = _packet_setup(monkeypatch, hab, le=("Ele", "LEI123"))
     monkeypatch.setenv("SIGNET_ONBOARDING_OMIT_GRANT", "1")
 
     def no_grant(*a, **kw):
@@ -596,3 +630,74 @@ def test_build_token_assertion_json_falls_back_to_env_server_aid(monkeypatch, ha
         raw=presenting.build_token_assertion(_HabVault(hab), conn).encode()
     )
     assert exn.ked["a"]["i"] == "Eenv"
+
+
+def _schema_vault(chain):
+    """Vault whose ``reger.creds`` holds ``said -> (schema, attrib, child SAIDs)``."""
+
+    class Creder:
+        def __init__(self, schema, attrib, kids):
+            self.sad = {
+                "s": schema,
+                "a": attrib,
+                "e": {"d": "Eedge", **{f"e{i}": {"n": k} for i, k in enumerate(kids)}},
+            }
+
+    store = {said: Creder(*spec) for said, spec in chain.items()}
+
+    class Creds:
+        def get(self, keys):
+            return store.get(keys[0])
+
+    class Reger:
+        creds = Creds()
+
+    class Rgy:
+        reger = Reger()
+
+    class Vault:
+        rgy = Rgy()
+
+    return Vault
+
+
+def test_legal_entity_subunit_prefers_subunit_over_le():
+    vault = _schema_vault(
+        {
+            "Elesr": ("Elesr-schema", {"i": "Eholder"}, ["Eauth"]),
+            "Eauth": ("Eauth-schema", {"i": "Eqvi"}, ["Esub"]),
+            "Esub": (
+                presenting.LE_SUBUNIT_SCHEMA_SAID,
+                {"i": "Esubunit", "LEI": "SUBLEI"},
+                ["Ele"],
+            ),
+            "Ele": (
+                presenting.LEGAL_ENTITY_SCHEMA_SAID,
+                {"i": "Ele-aid", "LEI": "LELEI"},
+                [],
+            ),
+        }
+    )
+    assert presenting.legal_entity_subunit(vault, "Elesr") == ("Esubunit", "SUBLEI")
+    assert presenting.legal_entity_aid(vault, "Elesr") == "Ele-aid"
+
+
+def test_legal_entity_subunit_falls_back_to_le_without_subunit():
+    vault = _schema_vault(
+        {
+            "Eecr": ("Eecr-schema", {"i": "Eholder"}, ["Eauth"]),
+            "Eauth": ("Eauth-schema", {"i": "Eqvi"}, ["Ele"]),
+            "Ele": (
+                presenting.LEGAL_ENTITY_SCHEMA_SAID,
+                {"i": "Ele-aid", "LEI": "LELEI"},
+                [],
+            ),
+        }
+    )
+    assert presenting.legal_entity_subunit(vault, "Eecr") == ("Ele-aid", "LELEI")
+
+
+def test_legal_entity_subunit_none_without_le_or_subunit():
+    vault = _schema_vault({"Eecr": ("Eecr-schema", {"i": "Eholder"}, [])})
+    assert presenting.legal_entity_subunit(vault, "Eecr") is None
+    assert presenting.legal_entity_aid(vault, "Eecr") is None

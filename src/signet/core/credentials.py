@@ -22,6 +22,10 @@ logger = help.ogler.getLogger(__name__)
 
 LEGAL_ENTITY_SCHEMA_SAID = "ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY"
 
+# Legal Entity Subunit credential schema SAID (keep in sync with SCHEMA_LE_SUBUNIT in
+# scripts/dev-live/env.sh; it may change on re-saidification).
+LE_SUBUNIT_SCHEMA_SAID = "EP1jGIb7KXotuUZJf1NSu5wQ089epFfv93cpZECj-YBs"
+
 # Seeded so the "Select Credential" dropdown in AddConnectionDialog isn't
 # empty in mock mode (never in live dev, which must use real credentials).
 _MOCK_CREDENTIAL = {

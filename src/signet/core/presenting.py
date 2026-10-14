@@ -28,7 +28,7 @@ from keri.help import helping
 from keri.vdr import credentialing
 
 from . import configing
-from .credentials import LEGAL_ENTITY_SCHEMA_SAID
+from .credentials import LE_SUBUNIT_SCHEMA_SAID, LEGAL_ENTITY_SCHEMA_SAID
 
 logger = help.ogler.getLogger(__name__)
 
@@ -350,11 +350,10 @@ def witness_oobi_urls(hab, pre: str | None = None) -> list[str]:
     return urls
 
 
-def legal_entity_aid(vault, credential_said: str) -> str | None:
+def _find_chain_credential(vault, credential_said: str, schema_said: str):
     """
-    The Legal Entity AID of the credential's chain: the issuee of its Legal Entity
-    vLEI credential. The server cannot pre-configure it (it varies per requester), so
-    the requester conveys its key state in ``a.udap.oobis``.
+    First credential of ``schema_said`` reachable from ``credential_said`` through its
+    edges (breadth-first, the credential itself included), or None.
     """
     try:
         creds = vault.rgy.reger.creds
@@ -367,13 +366,38 @@ def legal_entity_aid(vault, credential_said: str) -> str | None:
             creder = creds.get(keys=(said,))
             if creder is None:
                 continue
-            if creder.sad.get("s") == LEGAL_ENTITY_SCHEMA_SAID:
-                return (creder.sad.get("a") or {}).get("i") or None
+            if creder.sad.get("s") == schema_said:
+                return creder
             for edge in (creder.sad.get("e") or {}).values():
                 if isinstance(edge, dict) and edge.get("n"):
                     pending.append(edge["n"])
     except Exception as exc:
-        logger.warning("Could not resolve the Legal Entity AID: %s", exc)
+        logger.warning("Could not walk the credential chain: %s", exc)
+    return None
+
+
+def legal_entity_aid(vault, credential_said: str) -> str | None:
+    """
+    The Legal Entity AID of the credential's chain: the issuee of its Legal Entity
+    vLEI credential. The server cannot pre-configure it (it varies per requester), so
+    the requester conveys its key state in ``a.udap.oobis``.
+    """
+    creder = _find_chain_credential(vault, credential_said, LEGAL_ENTITY_SCHEMA_SAID)
+    return ((creder.sad.get("a") or {}).get("i") or None) if creder else None
+
+
+def legal_entity_subunit(vault, credential_said: str) -> tuple[str, str] | None:
+    """
+    ``(aid, lei)`` of the JSON packet's ``legal_entity``: the issuee (``a.i``) and
+    ``a.LEI`` of the chain's Legal Entity Subunit credential, or of its Legal Entity
+    credential when the chain has no subunit (the ECR chain). ``lei`` may be empty.
+    None if the chain has neither.
+    """
+    for schema_said in (LE_SUBUNIT_SCHEMA_SAID, LEGAL_ENTITY_SCHEMA_SAID):
+        creder = _find_chain_credential(vault, credential_said, schema_said)
+        if creder is not None:
+            attrib = creder.sad.get("a") or {}
+            return attrib.get("i") or "", attrib.get("LEI") or ""
     return None
 
 
@@ -500,6 +524,10 @@ def build_onboarding_packet(
     The grant is plain (``a`` is ``{m, i}``, no ``a.udap``) since the packet carries
     the metadata. Built fresh per call: ``dt`` is the server's replay guard.
 
+    ``legal_entity`` describes the Legal Entity Subunit (``legal_entity_subunit``): its
+    issuee AID and ``LEI``, falling back to the chain's Legal Entity credential, then
+    to the presenter's AID and ``DEMO_LEI``.
+
     With SIGNET_ONBOARDING_OMIT_GRANT the grant is neither built nor sent (the server
     field is optional while its grant verification is unfinished), so no server AID is
     needed either.
@@ -534,7 +562,8 @@ def build_onboarding_packet(
             "The server advertises no AID; set SIGNET_ONBOARDING_SERVER_AID."
         )
 
-    le_aid = legal_entity_aid(vault, said) or hab.pre
+    le_aid, le_lei = legal_entity_subunit(vault, said) or ("", "")
+    le_aid = le_aid or hab.pre
     oobis = configing.onboarding_oobi_override() or witness_oobi_urls(hab, le_aid)
     if not oobis:
         raise PresentingError(
@@ -554,7 +583,7 @@ def build_onboarding_packet(
     packet = {
         "correlation_id": correlation_id,
         "legal_entity": {
-            "lei": DEMO_LEI,
+            "lei": le_lei or DEMO_LEI,
             "aid": le_aid,
             "qvi_lei": DEMO_QVI_LEI,
             "oobi": oobis,

@@ -28,6 +28,8 @@
   "ipex_grant": "<CESR stream: chain KELs, TELs and credentials, ending in the IPEX grant exn>"
 }
 ```
+`legal_entity` describes the presenter's Legal Entity Subunit (its `aid`, `lei` and witness `oobi`s), not the parent Legal Entity.
+
 ## Example 
 ```json
 {
