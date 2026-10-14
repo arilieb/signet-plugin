@@ -8,7 +8,9 @@ servers exist. Only active when signet.core.configing.is_mock_mode() is True.
 """
 
 import uuid
+from pathlib import Path
 from typing import Any, Dict
+from urllib.parse import urlparse
 
 from ..db.basing import SignetConnection
 from . import configing
@@ -54,7 +56,16 @@ _POLLED_ONCE: set = set()
 
 
 def mock_discover_server(base_url: str) -> Dict[str, Any]:
-    """Canned /.well-known/udap onboarding discovery."""
+    """Canned /.well-known/udap (or full .well-known/keri URL) onboarding discovery."""
+    if configing.is_keri_discovery_url(base_url):
+        origin = base_url.split("/.well-known/", 1)[0]
+        return {
+            "success": True,
+            "onboarding_endpoint": f"{origin}/udap/onboarding",
+            "aid": configing.onboarding_server_aid()
+            or "EMockServerAid0000000000000000000000000000000",
+            "token_endpoint": f"{origin}/token",
+        }
     return {
         "success": True,
         "onboarding_endpoint": f"{base_url}/udap/onboarding",
@@ -63,7 +74,7 @@ def mock_discover_server(base_url: str) -> Dict[str, Any]:
     }
 
 
-def mock_submit_onboarding(connection_packet: Dict[str, Any]) -> Dict[str, Any]:
+def mock_submit_onboarding(_packet: Dict[str, Any]) -> Dict[str, Any]:
     """Canned 202 Accepted response for POST /udap/onboarding."""
     return {
         "success": True,
@@ -122,7 +133,10 @@ def mock_request_access_token(client_id: str) -> Dict[str, Any]:
 
 
 def discoverable_connections() -> list[Dict[str, Any]]:
-    """Partners offered by AddConnectionDialog: fixtures in mock mode, the local Echelon in live dev."""
+    """
+    Partners offered by AddConnectionDialog: fixtures in mock mode, the local Echelon
+    in live dev, else the partner named by SIGNET_PARTNER_URL (if set).
+    """
     if configing.is_live_dev():
         return [
             {
@@ -135,6 +149,18 @@ def discoverable_connections() -> list[Dict[str, Any]]:
         ]
     if configing.is_mock_mode():
         return DISCOVERABLE_CONNECTIONS
+    if configing.is_partner_url_set():
+        url = configing.partner_url()
+        host = urlparse(url).hostname or url
+        return [
+            {
+                "connection_id": host.replace(".", "-"),
+                "display_name": host,
+                "logo_icon_path": ":/assets/material-icons/identity_platform.svg",
+                "base_url": url,
+                "purpose": "TREAT",
+            }
+        ]
     return []
 
 
@@ -180,10 +206,14 @@ def seed_connections() -> list[SignetConnection]:
 # Illustrative FHIR Groups per connection_id, shown by the FHIR APIs page in
 # mock mode only. Purely fixtures: the real Group list will come from the
 # partner's FHIR server.
+# Canned Group ids for the Onyx connection, used outside mock mode too until
+# the partner's Group listing is usable.
+STATIC_GROUP_IDS = ["grp-demo-export-1", "grp-demo-export-2", "grp-demo-export-3"]
+
 FHIR_GROUPS: dict[str, list[Dict[str, str]]] = {
     "onyx-demo": [
-        {"group_id": "onyx-cohort-a", "display_name": "Onyx Cohort A"},
-        {"group_id": "onyx-cohort-b", "display_name": "Onyx Cohort B"},
+        {"group_id": group_id, "display_name": group_id}
+        for group_id in STATIC_GROUP_IDS
     ],
     "cambia-demo": [
         {"group_id": "cambia-members-2026", "display_name": "Cambia Members 2026"},
@@ -196,11 +226,16 @@ FHIR_GROUPS: dict[str, list[Dict[str, str]]] = {
 }
 
 
-def fhir_groups(connection_id: str) -> Dict[str, list]:
-    """Groups offered for a connection: fixtures in mock mode, none otherwise."""
+def fhir_groups(connection_id: str) -> Dict[str, Any]:
+    """Groups offered for a connection, as ``{"groups": [{id, name}]}``: fixtures in mock mode, none otherwise."""
     if not configing.is_mock_mode():
-        return dict(groups=[])
-    return {"groups": list(FHIR_GROUPS.get(connection_id, []))}
+        return {"groups": []}
+    return {
+        "groups": [
+            {"id": group["group_id"], "name": group["display_name"]}
+            for group in FHIR_GROUPS.get(connection_id, [])
+        ]
+    }
 
 
 def fhir_endpoints(connection_id: str, group_id: str) -> list[Dict[str, Any]]:
@@ -241,5 +276,32 @@ def fhir_endpoints(connection_id: str, group_id: str) -> list[Dict[str, Any]]:
     ]
 
 
-def mock_groups():
-    return []
+MOCK_EXPORT_STATUS_URL = f"{ONYX_BASE_URL}/export-status/mock"
+
+MOCK_EXPORT_FILES: list[Dict[str, str]] = [
+    {"type": "Patient", "url": f"{ONYX_BASE_URL}/download/mock-patient"},
+    {"type": "Coverage", "url": f"{ONYX_BASE_URL}/download/mock-coverage"},
+]
+
+
+def mock_davinci_data_export() -> Dict[str, Any]:
+    """Canned 202 Accepted response for POST /Group/{id}/$davinci-data-export/."""
+    return {"success": True, "status_url": MOCK_EXPORT_STATUS_URL}
+
+
+def mock_poll_export_status() -> Dict[str, Any]:
+    """Canned completed export status with a file list."""
+    return {
+        "success": True,
+        "state": "complete",
+        "files": [dict(file) for file in MOCK_EXPORT_FILES],
+    }
+
+
+def mock_download_export_file(dest_dir: Path, filename: str) -> Dict[str, Any]:
+    """Write a tiny canned ndjson file for a mock export download."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    path = dest_dir / filename
+    content = b'{"resourceType": "Patient", "id": "mock"}\n'
+    path.write_bytes(content)
+    return {"success": True, "path": str(path), "bytes": len(content)}

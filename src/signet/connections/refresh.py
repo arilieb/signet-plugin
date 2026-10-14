@@ -33,6 +33,7 @@ def apply_result(connection: SignetConnection, result: dict[str, Any]) -> None:
         result.get("correlation_id") or connection.correlation_id
     )
     connection.poll_url = result.get("poll_url") or connection.poll_url
+    connection.decision_due = result.get("decision_due") or connection.decision_due
     connection.retry_after = result.get("retry_after") or ""
     connection.purpose_status = (
         result.get("purpose_status") or connection.purpose_status

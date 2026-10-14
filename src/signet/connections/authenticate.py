@@ -76,7 +76,11 @@ async def authenticate_connection(vault, db, connection_id: str) -> dict:
     except presenting.PresentingError as exc:
         return {"success": False, "error": str(exc)}
 
-    result = await remoting.request_access_token(token_endpoint, client_id, assertion)
+    scope = connection.scopes if configing.is_json_format() else ""
+    logger.info(f"TOKEN ENDPOINT: {token_endpoint}")
+    result = await remoting.request_access_token(
+        token_endpoint, client_id, assertion, scope
+    )
     if not result.get("success"):
         return {
             "success": False,
@@ -87,6 +91,7 @@ async def authenticate_connection(vault, db, connection_id: str) -> dict:
     now = datetime.now(timezone.utc)
     expires_in = int(result.get("expires_in") or 0)
     connection.access_token = result["access_token"]
+    logger.info(f"ACCESS TOKEN: {connection.access_token}")
     connection.token_type = result.get("token_type", "Bearer")
     connection.token_scope = result.get("scope", "")
     connection.token_expires_at = (now + timedelta(seconds=expires_in)).isoformat()

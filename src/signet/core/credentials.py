@@ -3,13 +3,15 @@
 signet.core.credentials module
 
 Filters the vault's received credentials down to those whose schema SAID is in
-the accepted set (SIGNET_CREDENTIAL_SCHEMAS, default the ECR), presented when
+the accepted set (SIGNET_CREDENTIAL_SCHEMAS, default the LESR), presented when
 submitting a UDAP vLEI onboarding request.
 
 The ECR chain is GLEIF External -> QVI -> LE -> ECR Auth -> ECR; the LESR chain
-is External -> QVI -> LE -> LE Subunit -> LESR Auth -> LESR (ONBOARDING.md S4.6).
-The LESR SAID is deliberately not hardcoded here: it is pending re-saidification
-and comes from configuration.
+is External -> QVI -> LE -> LE Subunit -> LESR Auth -> LESR (ONBOARDING.md S4.6); the
+simple LESR chain, for orgs without subunits, is External -> QVI -> LE -> LESR Auth
+(`le` edge, issued by the LE AID) -> LESR.
+The default LESR SAID (configing.LESR_SCHEMA_SAID) may change on re-saidification;
+SIGNET_CREDENTIAL_SCHEMAS overrides it.
 """
 
 from typing import Any
@@ -21,6 +23,10 @@ from .configing import ECR_SCHEMA_SAID, accepted_credential_schemas, is_mock_mod
 logger = help.ogler.getLogger(__name__)
 
 LEGAL_ENTITY_SCHEMA_SAID = "ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY"
+
+# Legal Entity Subunit credential schema SAID (keep in sync with SCHEMA_LE_SUBUNIT in
+# scripts/dev-live/env.sh; it may change on re-saidification).
+LE_SUBUNIT_SCHEMA_SAID = "EP1jGIb7KXotuUZJf1NSu5wQ089epFfv93cpZECj-YBs"
 
 # Seeded so the "Select Credential" dropdown in AddConnectionDialog isn't
 # empty in mock mode (never in live dev, which must use real credentials).
