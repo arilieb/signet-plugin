@@ -128,7 +128,9 @@ def test_omit_ipex_grant(monkeypatch):
 def test_onboarding_oobi_override(monkeypatch):
     monkeypatch.delenv("SIGNET_ONBOARDING_OOBI", raising=False)
     assert configing.onboarding_oobi_override() == []
-    monkeypatch.setenv("SIGNET_ONBOARDING_OOBI", " https://a/oobi/E1 , ,https://b/oobi/E1 ")
+    monkeypatch.setenv(
+        "SIGNET_ONBOARDING_OOBI", " https://a/oobi/E1 , ,https://b/oobi/E1 "
+    )
     assert configing.onboarding_oobi_override() == [
         "https://a/oobi/E1",
         "https://b/oobi/E1",

@@ -534,7 +534,9 @@ async def test_register_to_explicit_url(monkeypatch):
 
     def handler(request):
         seen.append(str(request.url))
-        return httpx.Response(201, json={"client_id": "C", "scope": "system/Group.read"})
+        return httpx.Response(
+            201, json={"client_id": "C", "scope": "system/Group.read"}
+        )
 
     _patch(monkeypatch, handler)
     r = await remoting.register_dynamic_client(

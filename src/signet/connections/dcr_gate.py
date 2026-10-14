@@ -110,14 +110,14 @@ class DynamicClientRegistrationGateDialog(LocksmithDialog):
             if configing.is_json_format() and not configing.is_mock_mode():
                 discovery = await remoting.discover_server(connection.base_url)
                 if not discovery.get("success"):
-                    self.show_error(
-                        discovery.get("error", "Server discovery failed.")
-                    )
+                    self.show_error(discovery.get("error", "Server discovery failed."))
                     self._reset_buttons()
                     return
                 registration_url = discovery.get("registration_endpoint", "")
                 if not registration_url:
-                    self.show_error("Server does not advertise a registration endpoint.")
+                    self.show_error(
+                        "Server does not advertise a registration endpoint."
+                    )
                     self._reset_buttons()
                     return
                 options["url"] = registration_url

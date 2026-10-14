@@ -307,7 +307,14 @@ class FhirApisListPage(LocksmithFormPage):
                 self._show_export_files(status.get("files", []))
                 return
             self._show_export_rows(
-                [{"File": "Data export", "Type": "", "Size": "", "Status": "In progress"}]
+                [
+                    {
+                        "File": "Data export",
+                        "Type": "",
+                        "Size": "",
+                        "Status": "In progress",
+                    }
+                ]
             )
             try:
                 delay = float(status.get("retry_after") or _DEFAULT_POLL_SECONDS)

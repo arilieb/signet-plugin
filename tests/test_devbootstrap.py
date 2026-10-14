@@ -66,12 +66,17 @@ CONFIG = {"attributes": {"AID": HOLDER}, "rules": {}}
 
 
 def test_no_action_without_config():
-    assert devbootstrap.lesr_auth_next(_reger(), HAB, LesrAuthState(), None, 0.0) is None
+    assert (
+        devbootstrap.lesr_auth_next(_reger(), HAB, LesrAuthState(), None, 0.0) is None
+    )
 
 
 def test_no_action_until_le_admitted():
     for reger in (_reger(le_admitted=False), _reger(le_present=False)):
-        assert devbootstrap.lesr_auth_next(reger, HAB, LesrAuthState(), CONFIG, 0.0) is None
+        assert (
+            devbootstrap.lesr_auth_next(reger, HAB, LesrAuthState(), CONFIG, 0.0)
+            is None
+        )
 
 
 def test_issue_when_le_admitted_and_no_auth():
@@ -83,15 +88,23 @@ def test_issue_when_le_admitted_and_no_auth():
 def test_grant_when_auth_issued_but_not_granted():
     reger = _reger(auth_issued=True)
     state = LesrAuthState()
-    assert devbootstrap.lesr_auth_next(reger, HAB, state, CONFIG, 0.0) == ("grant", "EAUTH")
+    assert devbootstrap.lesr_auth_next(reger, HAB, state, CONFIG, 0.0) == (
+        "grant",
+        "EAUTH",
+    )
     state.granted = True
     assert devbootstrap.lesr_auth_next(reger, HAB, state, CONFIG, 0.0) is None
 
 
 def test_in_flight_auth_is_not_reissued():
     state = LesrAuthState()
-    state.auth_said = "EAUTH"  # created, still awaiting receipts: not yet in reger.issus
-    assert devbootstrap.lesr_auth_next(_reger(), HAB, state, CONFIG, 0.0) == ("grant", "EAUTH")
+    state.auth_said = (
+        "EAUTH"  # created, still awaiting receipts: not yet in reger.issus
+    )
+    assert devbootstrap.lesr_auth_next(_reger(), HAB, state, CONFIG, 0.0) == (
+        "grant",
+        "EAUTH",
+    )
 
 
 def test_busy_and_retry_backoff():

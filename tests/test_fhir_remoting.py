@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from signet.core import configing, mock_data, remoting
+from signet.core import configing, remoting
 
 FHIR = "http://fhir.test/v1"
 
@@ -77,7 +77,9 @@ async def test_get_groups_sends_bearer_and_strips_keri_path(monkeypatch):
 async def test_get_groups_follows_paging(monkeypatch):
     def handler(request):
         if request.url.params.get("page") == "2":
-            return httpx.Response(200, json={"entry": [{"resource": {"id": "g2", "name": "B"}}]})
+            return httpx.Response(
+                200, json={"entry": [{"resource": {"id": "g2", "name": "B"}}]}
+            )
         return httpx.Response(
             200,
             json={
@@ -150,7 +152,9 @@ async def test_export_kickoff(monkeypatch):
 
     def handler(request):
         seen.append(request)
-        return httpx.Response(202, headers={"Content-Location": "/v1/export-status/abc"})
+        return httpx.Response(
+            202, headers={"Content-Location": "/v1/export-status/abc"}
+        )
 
     _patch(monkeypatch, handler)
     r = await remoting.davinci_data_export(_connection(), "g1")
@@ -168,10 +172,14 @@ async def test_export_kickoff(monkeypatch):
 @pytest.mark.parametrize("slash", ["", "/"])
 async def test_export_kickoff_status_url_prefix(monkeypatch, slash):
     monkeypatch.setenv(
-        "SIGNET_EXPORT_STATUS_URL_PREFIX", f"{FHIR}/Group/davinci-data-export-status{slash}"
+        "SIGNET_EXPORT_STATUS_URL_PREFIX",
+        f"{FHIR}/Group/davinci-data-export-status{slash}",
     )
     location = f"{FHIR}/blueshost/v2/Group/davinci-data-export-status/abc"
-    _patch(monkeypatch, lambda req: httpx.Response(202, headers={"Content-Location": location}))
+    _patch(
+        monkeypatch,
+        lambda req: httpx.Response(202, headers={"Content-Location": location}),
+    )
     r = await remoting.davinci_data_export(_connection(), "g1")
     assert r["status_url"] == f"{FHIR}/Group/davinci-data-export-status/abc"
 
@@ -182,7 +190,9 @@ async def test_export_kickoff_get(monkeypatch):
 
     def handler(request):
         seen.append(request)
-        return httpx.Response(202, headers={"Content-Location": "/v1/export-status/abc"})
+        return httpx.Response(
+            202, headers={"Content-Location": "/v1/export-status/abc"}
+        )
 
     _patch(monkeypatch, handler)
     r = await remoting.davinci_data_export(_connection(), "g1")
@@ -257,16 +267,23 @@ async def test_download_streams_to_disk(monkeypatch, tmp_path):
 
     _patch(monkeypatch, handler)
     r = await remoting.download_export_file(
-        _connection(), f"{FHIR}/download/t1", tmp_path / "out", filename="Patient-1.ndjson"
+        _connection(),
+        f"{FHIR}/download/t1",
+        tmp_path / "out",
+        filename="Patient-1.ndjson",
     )
     assert seen[0].headers["authorization"] == "Bearer tok123"
     assert r["success"] and r["bytes"] == 20
-    assert (tmp_path / "out" / "Patient-1.ndjson").read_bytes() == b'{"id": 1}\n{"id": 2}\n'
+    assert (
+        tmp_path / "out" / "Patient-1.ndjson"
+    ).read_bytes() == b'{"id": 1}\n{"id": 2}\n'
 
 
 async def test_download_error(monkeypatch, tmp_path):
     _patch(monkeypatch, lambda req: httpx.Response(401, json={}))
-    r = await remoting.download_export_file(_connection(), f"{FHIR}/download/t1", tmp_path)
+    r = await remoting.download_export_file(
+        _connection(), f"{FHIR}/download/t1", tmp_path
+    )
     assert not r["success"] and r["status_code"] == 401
 
 

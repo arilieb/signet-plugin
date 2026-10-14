@@ -189,7 +189,9 @@ def lesr_auth_next(reger, hab, state: LesrAuthState, config, now: float):
     return None
 
 
-def lesr_auth_do(vault, state: LesrAuthState, hab, action, config, tock=0.0, timeout=120.0):
+def lesr_auth_do(
+    vault, state: LesrAuthState, hab, action, config, tock=0.0, timeout=120.0
+):
     """
     Doer generator: issue the LESR Auth from ``hab`` (to the QVI that issued the LE
     credential, with an I2I ``le`` edge) and IPEX-grant it to the QVI.
@@ -203,13 +205,19 @@ def lesr_auth_do(vault, state: LesrAuthState, hab, action, config, tock=0.0, tim
     def do(tymth, tock=tock, **kwa):
         yield tock
         try:
-            rgy, registrar, credentialer = vault.rgy, vault.registrar, vault.credentialer
+            rgy, registrar, credentialer = (
+                vault.rgy,
+                vault.registrar,
+                vault.credentialer,
+            )
             if kind == "issue":
                 le = subject
                 qvi = le.sad["i"]
                 registry = rgy.registryByName(LESR_AUTH_SCHEMA_SAID)
                 if registry is not None and registry.hab.pre != hab.pre:
-                    raise RuntimeError("registry for the LESR Auth schema is another AID's")
+                    raise RuntimeError(
+                        "registry for the LESR Auth schema is another AID's"
+                    )
                 if registry is None:
                     registry = rgy.makeRegistry(
                         name=LESR_AUTH_SCHEMA_SAID,
@@ -245,7 +253,9 @@ def lesr_auth_do(vault, state: LesrAuthState, hab, action, config, tock=0.0, tim
                     data=config["attributes"],
                     private=False,
                 )
-                state.auth_said = creder.said  # remembered before the waits: never issue twice
+                state.auth_said = (
+                    creder.said
+                )  # remembered before the waits: never issue twice
                 dt = creder.attrib.get("dt") or helping.nowIso8601()
                 iserder = registry.issue(said=creder.said, dt=dt)
                 rseal = SealEvent(iserder.pre, iserder.snh, iserder.said)

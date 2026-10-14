@@ -248,7 +248,9 @@ def _packet_setup(monkeypatch, hab, le=None):
     monkeypatch.setattr(
         presenting,
         "_build_chain_stream",
-        lambda vault, h, srv, s: presenting._build_grant_message(vault, h, srv, s, None),
+        lambda vault, h, srv, s: presenting._build_grant_message(
+            vault, h, srv, s, None
+        ),
     )
     monkeypatch.setattr(presenting, "legal_entity_subunit", lambda v, s: le)
     monkeypatch.setattr(
@@ -454,12 +456,16 @@ def _edge(*saids):
 
 def _chain_vault(edges, missing=()):
     """Vault whose reger holds a credential per SAID in ``edges`` (said -> child SAIDs)."""
-    creds = {s: _Msg(s, edge=_edge(*kids) if kids else None) for s, kids in edges.items()}
+    creds = {
+        s: _Msg(s, edge=_edge(*kids) if kids else None) for s, kids in edges.items()
+    }
 
     class Reger:
         def cloneCred(self, said):
             if said in missing or said not in creds:
-                raise presenting.kering.MissingEntryError(f"no credential found with said {said}")
+                raise presenting.kering.MissingEntryError(
+                    f"no credential found with said {said}"
+                )
             return creds[said], _Qb64(b"P"), _Qb64(b"S"), _Qb64(b"D")
 
     class Rgy:
@@ -542,10 +548,14 @@ def _dcr_json_setup(monkeypatch, hab):
     monkeypatch.setattr(
         presenting,
         "_build_chain_stream",
-        lambda vault, h, srv, s: presenting._build_grant_message(vault, h, srv, s, None),
+        lambda vault, h, srv, s: presenting._build_grant_message(
+            vault, h, srv, s, None
+        ),
     )
     monkeypatch.setattr(
-        presenting, "witness_oobi_urls", lambda h, pre=None: ["http://w/oobi/E1", "http://x/oobi/E1"]
+        presenting,
+        "witness_oobi_urls",
+        lambda h, pre=None: ["http://w/oobi/E1", "http://x/oobi/E1"],
     )
     return said
 
@@ -751,7 +761,13 @@ def test_legal_entity_subunit_simple_chain_is_the_legal_entity():
         {
             "LESR": _sad("LESR", "ELESR", "Eholder", edges={"auth": {"n": "AUTH"}}),
             "AUTH": _sad("AUTH", "EAUTH", "Eqvi", edges={"le": {"n": "LE"}}),
-            "LE": _sad("LE", LEGAL_ENTITY_SCHEMA_SAID, "Eholder", "LEI42", {"qvi": {"n": "QVI"}}),
+            "LE": _sad(
+                "LE",
+                LEGAL_ENTITY_SCHEMA_SAID,
+                "Eholder",
+                "LEI42",
+                {"qvi": {"n": "QVI"}},
+            ),
             "QVI": _sad("QVI", "EQVISCHEMA", "Ele"),
         }
     )

@@ -125,7 +125,10 @@ def _error_result(response: httpx.Response) -> Dict[str, Any]:
     )
     details = [
         f"{label}: {data[key]}"
-        for key, label in (("failed_layer", "failed layer"), ("review_endpoint", "review"))
+        for key, label in (
+            ("failed_layer", "failed layer"),
+            ("review_endpoint", "review"),
+        )
         if data.get(key)
     ]
     if details:

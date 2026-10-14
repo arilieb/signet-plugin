@@ -297,7 +297,9 @@ async def test_authenticate_surfaces_server_error_in_json_format(monkeypatch):
     try:
         dialog, errors, _ = _dialog(db)
         monkeypatch.setenv("SIGNET_ONBOARDING_FORMAT", "json")
-        await _confirm(dialog, monkeypatch, {"success": False, "error": "invalid_client"})
+        await _confirm(
+            dialog, monkeypatch, {"success": False, "error": "invalid_client"}
+        )
         assert errors == ["invalid_client"]
         assert db.signet_connections.get(keys=("c1",)).access_token == ""
     finally:
