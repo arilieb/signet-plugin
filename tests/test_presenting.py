@@ -3,7 +3,10 @@ from keri.app import habbing
 from keri.core import coring, serdering
 from keri.help import helping
 
+from types import SimpleNamespace
+
 from signet.core import configing, presenting
+from signet.core.credentials import LEGAL_ENTITY_SCHEMA_SAID
 
 
 @pytest.fixture
@@ -287,7 +290,7 @@ def test_build_packet_shape(monkeypatch, hab):
     }
     assert packet["submitter"] == {"role": "Data Exchange Representative"}
     assert packet["requested_purposes"] == [
-        {"purpose": "TREAT", "scopes": presenting.DEMO_SCOPES}
+        {"purpose": "TREAT", "scopes": configing.onboarding_scopes()}
     ]
     assert packet["client_metadata"] == {}
     assert packet["contacts"] == {
@@ -316,6 +319,21 @@ def test_build_packet_le_aid_falls_back_to_hab(monkeypatch, hab):
     legal_entity = json.loads(req.body)["legal_entity"]
     assert legal_entity["aid"] == hab.pre
     assert legal_entity["lei"] == presenting.DEMO_LEI
+
+
+def test_build_packet_simple_chain_legal_entity_is_holder(monkeypatch, hab):
+    import json
+
+    said = _packet_setup(monkeypatch, hab, le=(hab.pre, "LEI42"))
+    req = presenting.build_onboarding_packet(
+        _vault(hab, hab.pre),
+        {"said": said, "holder_pre": hab.pre},
+        "http://s/o",
+        "Esrv",
+    )
+    legal_entity = json.loads(req.body)["legal_entity"]
+    assert legal_entity["aid"] == hab.pre
+    assert legal_entity["lei"] == "LEI42"
 
 
 def test_build_packet_empty_lei_and_aid_fall_back(monkeypatch, hab):
@@ -701,3 +719,49 @@ def test_legal_entity_subunit_none_without_le_or_subunit():
     vault = _schema_vault({"Eecr": ("Eecr-schema", {"i": "Eholder"}, [])})
     assert presenting.legal_entity_subunit(vault, "Eecr") is None
     assert presenting.legal_entity_aid(vault, "Eecr") is None
+
+
+def _creds_vault(creds):
+    """Vault whose reger.creds maps said -> creder with ``sad``."""
+
+    class Creds:
+        def get(self, keys):
+            return creds.get(keys[0])
+
+    class Reger:
+        creds = Creds()
+
+    class Rgy:
+        reger = Reger()
+
+    class Vault:
+        rgy = Rgy()
+
+    return Vault
+
+
+def _sad(said, schema, issuee="", lei="", edges=None):
+    a = {"i": issuee, "LEI": lei} if issuee else {}
+    return SimpleNamespace(sad={"d": said, "s": schema, "a": a, "e": edges})
+
+
+def test_legal_entity_subunit_simple_chain_is_the_legal_entity():
+    # LESR -> auth (le edge) -> LE -> QVI: no subunit, the holder is the LE issuee
+    vault = _creds_vault(
+        {
+            "LESR": _sad("LESR", "ELESR", "Eholder", edges={"auth": {"n": "AUTH"}}),
+            "AUTH": _sad("AUTH", "EAUTH", "Eqvi", edges={"le": {"n": "LE"}}),
+            "LE": _sad("LE", LEGAL_ENTITY_SCHEMA_SAID, "Eholder", "LEI42", {"qvi": {"n": "QVI"}}),
+            "QVI": _sad("QVI", "EQVISCHEMA", "Ele"),
+        }
+    )
+    assert presenting.legal_entity_subunit(vault, "LESR") == ("Eholder", "LEI42")
+    assert presenting.legal_entity_aid(vault, "LESR") == "Eholder"
+
+
+def test_chain_sources_simple_chain_order():
+    vault, creds = _chain_vault(
+        {"LESR": ["Auth"], "Auth": ["LE"], "LE": ["QVI"], "QVI": []}
+    )
+    ordered = presenting._chain_sources(vault, creds["LESR"])
+    assert [c.said for c, _ in ordered] == ["QVI", "LE", "Auth"]

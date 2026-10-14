@@ -37,7 +37,6 @@ REQUESTED_PURPOSE = "TREAT"
 # Demo values for the JSON submission packet (SUBMISSION_SHAPE.md); not user-entered yet.
 DEMO_LEI = "549300QKBENKLBXQ8968"
 DEMO_QVI_LEI = "254900OPPU84GM83MG36"
-DEMO_SCOPES = ["system/Group.read"]
 DEMO_TECHNICAL_CONTACT = "interop-eng@healthkeri.com"
 DEMO_SECURITY_CONTACT = "security@healthkeri.com"
 DCR_STATEMENT_TYPE = "urn:ietf:params:oauth:software-statement-type:acdc-vlei"
@@ -390,7 +389,7 @@ def legal_entity_subunit(vault, credential_said: str) -> tuple[str, str] | None:
     """
     ``(aid, lei)`` of the JSON packet's ``legal_entity``: the issuee (``a.i``) and
     ``a.LEI`` of the chain's Legal Entity Subunit credential, or of its Legal Entity
-    credential when the chain has no subunit (the ECR chain). ``lei`` may be empty.
+    credential when the chain has no subunit (the ECR chain and the simple LESR chain). ``lei`` may be empty.
     None if the chain has neither.
     """
     for schema_said in (LE_SUBUNIT_SCHEMA_SAID, LEGAL_ENTITY_SCHEMA_SAID):
@@ -525,8 +524,8 @@ def build_onboarding_packet(
     the metadata. Built fresh per call: ``dt`` is the server's replay guard.
 
     ``legal_entity`` describes the Legal Entity Subunit (``legal_entity_subunit``): its
-    issuee AID and ``LEI``, falling back to the chain's Legal Entity credential, then
-    to the presenter's AID and ``DEMO_LEI``.
+    issuee AID and ``LEI``, or the Legal Entity itself when the chain has no subunit
+    (the simple LESR chain), then the presenter's AID and ``DEMO_LEI``.
 
     With SIGNET_ONBOARDING_OMIT_GRANT the grant is neither built nor sent (the server
     field is optional while its grant verification is unfinished), so no server AID is
@@ -590,7 +589,7 @@ def build_onboarding_packet(
         },
         "submitter": {"role": credential.get("role", "")},
         "requested_purposes": [
-            {"purpose": REQUESTED_PURPOSE, "scopes": list(DEMO_SCOPES)}
+            {"purpose": REQUESTED_PURPOSE, "scopes": configing.onboarding_scopes()}
         ],
         "client_metadata": {},
         "contacts": {

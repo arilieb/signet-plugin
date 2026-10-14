@@ -11,7 +11,7 @@
 #   scripts/dev-live/issue-chain-ecr.sh <HOLDER_AID> [--reset]
 #
 # Everything lives under the keri base "signet-dev-live"; --reset deletes only that base (and is required to switch
-# between this chain and issue-chain-lesr.sh).
+# between this chain and issue-chain-lesr-subunit.sh).
 set -euo pipefail
 source "$( dirname "${BASH_SOURCE[0]}" )/env.sh"
 

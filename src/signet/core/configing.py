@@ -25,6 +25,9 @@ KERI_WELL_KNOWN = "/.well-known/keri"
 ONBOARDING_FORMAT_CESR = "cesr"
 ONBOARDING_FORMAT_JSON = "json"
 
+# Scopes requested at onboarding unless SIGNET_ONBOARDING_SCOPES says otherwise.
+DEFAULT_ONBOARDING_SCOPES = ("system/Group.read",)
+
 # Engagement Context Role (ECR) credential schema SAID.
 ECR_SCHEMA_SAID = "EEy9PkikFcANV1l7EHukCeXqrzT1hNZjGlUk7wuMO5jw"
 
@@ -109,6 +112,29 @@ def registration_endpoint_override() -> str:
 def token_endpoint_override() -> str:
     """Token endpoint replacing the advertised one in the json format (SIGNET_TOKEN_ENDPOINT)."""
     return os.environ.get("SIGNET_TOKEN_ENDPOINT", "").strip()
+
+
+def fhir_base_url_override() -> str:
+    """FHIR base URL replacing the one derived from the connection's base_url (SIGNET_FHIR_BASE_URL)."""
+    return os.environ.get("SIGNET_FHIR_BASE_URL", "").strip().rstrip("/")
+
+
+def export_method() -> str:
+    """HTTP method of ``$davinci-data-export`` (SIGNET_EXPORT_METHOD): ``GET``, else ``POST``."""
+    raw = os.environ.get("SIGNET_EXPORT_METHOD", "").strip().upper()
+    return "GET" if raw == "GET" else "POST"
+
+
+def export_status_url_prefix() -> str:
+    """URL prefix the export task id is appended to, replacing the advertised status URL (SIGNET_EXPORT_STATUS_URL_PREFIX)."""
+    raw = os.environ.get("SIGNET_EXPORT_STATUS_URL_PREFIX", "").strip()
+    return f"{raw.rstrip('/')}/" if raw else ""
+
+
+def onboarding_scopes() -> list[str]:
+    """Scopes requested at onboarding (SIGNET_ONBOARDING_SCOPES, space-separated); defaults to ``system/Group.read``."""
+    raw = os.environ.get("SIGNET_ONBOARDING_SCOPES", "")
+    return raw.split() or list(DEFAULT_ONBOARDING_SCOPES)
 
 
 def dcr_oobi_override() -> str:

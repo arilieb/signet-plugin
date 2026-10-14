@@ -44,9 +44,10 @@ From the locksmith repo venv, run `pip install -e .`.
 
 > **Status:** these scripts and steps were written but not yet run end to end. Treat every command as unverified until you have run it.
 
-By default `LOCKSMITH_ENVIRONMENT=development` runs signet in mock mode (canned responses, fake seeded connections). Setting `SIGNET_LIVE=1` in development switches to the real single-IPEX-grant onboarding (the grant's exn signature is the only signature) against local infrastructure. Two credential chains are supported (pick one per run; see Troubleshooting for switching):
+By default `LOCKSMITH_ENVIRONMENT=development` runs signet in mock mode (canned responses, fake seeded connections). Setting `SIGNET_LIVE=1` in development switches to the real single-IPEX-grant onboarding (the grant's exn signature is the only signature) against local infrastructure. Three credential chains are supported (pick one per run; see Troubleshooting for switching):
 
-- **LESR** (the main onboarding credential, `issue-chain-lesr.sh`): GLEIF External -> QVI -> LE (Practice) -> LE Subunit (Practice -> holder AID) -> LESR Auth (Practice -> QVI AID) -> LESR (QVI -> holder AID). The chain is linear: the LESR has a single `auth` edge.
+- **LESR subunit** (the main onboarding credential, `issue-chain-lesr-subunit.sh`): GLEIF External -> QVI -> LE (Practice) -> LE Subunit (Practice -> holder AID) -> LESR Auth (Practice -> QVI AID) -> LESR (QVI -> holder AID). The chain is linear: the LESR has a single `auth` edge.
+- **LESR simple** (for orgs without subunits, `issue-chain-lesr-simple.sh`): GLEIF External -> QVI -> LE (issued to the holder AID, which *is* the Legal Entity AID) -> LESR Auth (holder -> QVI AID, `le` edge) -> LESR (QVI -> holder AID). The holder's keys live only in the Locksmith vault, so the live-dev bootstrap issues the LESR Auth in-process and grants it to the QVI (`SIGNET_DEV_LESR_AUTH_FILE`); the script waits for that grant before it issues the LESR. No echelon-server config is rendered for this chain.
 - **ECR** (`issue-chain-ecr.sh`): GLEIF External -> QVI -> LE (Practice) -> ECR Auth (to the QVI AID) -> ECR (QVI -> holder AID).
 
 ### Environment variables
@@ -64,8 +65,12 @@ By default `LOCKSMITH_ENVIRONMENT=development` runs signet in mock mode (canned 
 | `SIGNET_ONBOARDING_OMIT_GRANT` | `1`/`true` sends the JSON packet without `ipex_grant` (the field is optional server-side while its grant verification is unfinished); the server AID is then not needed |
 | `SIGNET_ONBOARDING_OOBI` | Comma-separated OOBI URLs that replace the witness-derived `legal_entity.oobi` in the JSON packet (e.g. when the witnesses are not reachable from the partner) |
 | `SIGNET_ONBOARDING_SERVER_AID` | AID the grant is addressed to when the discovery document advertises none (`.well-known/keri`) |
-| `SIGNET_CREDENTIAL_SCHEMAS` | Comma-separated schema SAIDs of the credentials offered in Add Connection (default: the LESR schema); written by the issue scripts to `env.out` (the LESR SAID for `issue-chain-lesr.sh`) |
-| `SIGNET_DEV_OOBIS` | Comma-separated extra OOBIs the bootstrap resolves (External, QVI, Practice, and the chain's schema OOBIs); written by `issue-chain-ecr.sh` / `issue-chain-lesr.sh` to `scripts/dev-live/generated/env.out` |
+| `SIGNET_CREDENTIAL_SCHEMAS` | Comma-separated schema SAIDs of the credentials offered in Add Connection (default: the LESR schema); written by the issue scripts to `env.out` (the LESR SAID for `issue-chain-lesr-subunit.sh`) |
+| `SIGNET_DEV_LESR_AUTH_FILE` | Live dev, LESR simple chain only: JSON file (`{"attributes": ..., "rules": ...}`) written by `issue-chain-lesr-simple.sh` to `env.out`. When set, once the holder has admitted an LE credential issued to it, the bootstrap issues a LESR Auth from the holder to that credential's issuer (the QVI) and IPEX-grants it. Unset, the other chains are untouched |
+| `SIGNET_DEV_OOBIS` | Comma-separated extra OOBIs the bootstrap resolves (External, QVI, Practice, and the chain's schema OOBIs); written by `issue-chain-ecr.sh` / `issue-chain-lesr-subunit.sh` to `scripts/dev-live/generated/env.out` |
+| `SIGNET_FHIR_BASE_URL` | Replaces the FHIR base URL otherwise derived from the connection's `base_url` (with `/.well-known/...` stripped), e.g. `https://api-dmdh-dev.safhir.io/v1/api/pvav2` |
+| `SIGNET_EXPORT_STATUS_URL_PREFIX` | Replaces the `$davinci-data-export` status URL the server returns in `Content-Location`: signet polls this prefix with the export task id (the last path segment of the advertised URL) appended, e.g. `https://api-dmdh-dev.safhir.io/v1/api/pvav2/Group/davinci-data-export-status/` |
+| `SIGNET_EXPORT_METHOD` | `GET` starts `$davinci-data-export` with a GET and no body; anything else (default) POSTs `{"exportType": "hl7.fhir.us.davinci-pdex#provider-snapshot"}` |
 
 ### Prerequisites
 
@@ -101,16 +106,24 @@ cd ~/healthkeri/locksmith/src/locksmith && LOCKSMITH_ENVIRONMENT=development SIG
 
 #### 4 issue the chain and grant it to the holder
 ```bash
-cd ~/healthkeri/signet-plugin && scripts/dev-live/issue-chain-lesr.sh EDqyx_rMkeZT63D41DjSstHUDwx_1W_0qtnKz30iGIJb --reset
+cd ~/healthkeri/signet-plugin && scripts/dev-live/issue-chain-lesr-subunit.sh EDqyx_rMkeZT63D41DjSstHUDwx_1W_0qtnKz30iGIJb --reset
 # or, for the ECR chain: scripts/dev-live/issue-chain-ecr.sh <HOLDER_AID> --reset
 ```
+Simple chain (no subunit): the script blocks half way, so the order differs:
+```bash
+scripts/dev-live/issue-chain-lesr-simple.sh <HOLDER_AID> --reset [--timeout 600]
+# when it prints "Waiting ... for the LESR Auth grant": in another terminal, restart Locksmith with
+source scripts/dev-live/generated/env.out   # then start Locksmith as in step 3
+# Locksmith admits the QVI + LE credentials, issues the LESR Auth and grants it to the QVI; the script then issues the LESR
+```
+Step 6 (echelon-server) is not used for this chain. Afterwards the vault holds the LESR, LESR Auth, LE and QVI credentials.
 Restart Locksmith with: 
 ```bash
 source scripts/dev-live/generated/env.out
 ```
 so the issuer OOBIs resolve and the pending grants are admitted
 
-With `SIGNET_ONBOARDING_FORMAT=json` the vault must hold all five chain credentials (and the issuer KELs) before Add, since the whole chain is sent. A `PresentingError` naming an incomplete chain means: wait for the grants to be admitted, or restart Locksmith.
+With `SIGNET_ONBOARDING_FORMAT=json` the vault must hold all chain credentials (five for the subunit chain, four for the simple chain) (and the issuer KELs) before Add, since the whole chain is sent. A `PresentingError` naming an incomplete chain means: wait for the grants to be admitted, or restart Locksmith.
 
 #### 5 registrar 
 (own venv; no passcode, matching the keystore)
@@ -158,6 +171,20 @@ Assumptions (adjust once tried against the real server):
 - No HTTP signature headers; the response is assumed echelon-like (unauthenticated, 202/200 with `onboarding_id` (or `review_id`), `status`, `decision_due`, `Content-Location`). Polling needs a `Content-Location`.
 - With `SIGNET_ONBOARDING_FORMAT=json`, Registration (DCR) POSTs to the document's `registration_endpoint` (or `SIGNET_REGISTRATION_ENDPOINT`; mind its trailing slash, Django may redirect a POST without one) the body `{ipex_grant, oobi, purpose, client_name, grant_types: ["client_credentials"]}`: `ipex_grant` is the same plain chain stream as onboarding (fresh `dt` per call, addressed to the server AID), `oobi` is the presenter's first witness OOBI (`SIGNET_DCR_OOBI` overrides), `purpose` is the requested purpose, and no `redirect_uris` are sent. `201` (first registration) and `200` (re-registration) both succeed and return `client_id` and a space-separated `scope`. A `400 unapproved_software_statement` shows its `failed_layer` and `review_endpoint`. The server may key approval by the presenter AID rather than the Legal Entity AID sent at onboarding; if DCR is refused with `aid_purpose`, check which AID the approval recorded.
 - With the same format, Authenticate sends the registered `scope` along with the ACDC `client_assertion` to the advertised `token_endpoint` (or `SIGNET_TOKEN_ENDPOINT`). Known gap: the server has no `acdc_vlei` client authentication yet, so it answers `401 invalid_client`, which is shown as is. Without the json format, DCR and Authenticate are unchanged (`{base_url}/register`, `software_statement`, no `scope`).
+
+### DaVinci data export (FHIR APIs)
+
+The FHIR APIs page authenticates, then starts `POST {fhir_base}/Group/{groupId}/$davinci-data-export/` (note the trailing slash) with `Content-Type: application/fhir+json`, `Prefer: respond-async` and the body `{"exportType": "hl7.fhir.us.davinci-pdex#provider-snapshot"}`. A `202` carries the status URL to poll in `Content-Location`; when the export completes, each file in the manifest is a row to download into `~/signet-exports/<groupId>/`. Outside mock mode the Group dropdown is a static list (`grp-demo-export-1` to `-3`, `mock_data.STATIC_GROUP_IDS`), not the partner's `GET /Group`.
+
+For the dev partner, point signet at its FHIR base and status URL prefix (the dev server advertises a `Content-Location` under `.../pvav2/blueshost/v2/Group/...`, which answers 404):
+
+```bash
+SIGNET_FHIR_BASE_URL=https://api-dmdh-dev.safhir.io/v1/api/pvav2 \
+SIGNET_EXPORT_STATUS_URL_PREFIX=https://api-dmdh-dev.safhir.io/v1/api/pvav2/Group/davinci-data-export-status/ \
+python main.py   # plus the onboarding variables above
+```
+
+Add both variables to the launch command in [Demo against a `.well-known/keri` server](#demo-against-a-well-knownkeri-server). Signet appends the export task id to the prefix itself (a trailing slash on the prefix is optional); the id is the last path segment of the advertised `Content-Location` (`.../davinci-data-export-status/<id>` gives `<id>`), and every other part of the advertised URL is ignored. Unset, the advertised URL is polled as returned.
 
 ### Authenticate
 
@@ -207,7 +234,7 @@ curl -H "CESR-DESTINATION: BBilc4-L3tFUnfM_wJr4S4OJanAv_VmF_dJNN6vkf2Ha" \
 
 ### Whitelist toggle demo
 
-`server-lesr.config.yaml` whitelists the QVI AID, so onboarding returns 200 `approved`. Restart the server with `server-lesr.config.review.yaml` (empty whitelist) to get 202 `in-review`; the connection shows red until approved, then orange after Refresh. Both files are generated into `scripts/dev-live/` (git-ignored) by `issue-chain-lesr.sh` from `server-lesr.config.yaml.tmpl` (the ECR equivalents are `server-ecr.config*.yaml`).
+`server-lesr.config.yaml` whitelists the QVI AID, so onboarding returns 200 `approved`. Restart the server with `server-lesr.config.review.yaml` (empty whitelist) to get 202 `in-review`; the connection shows red until approved, then orange after Refresh. Both files are generated into `scripts/dev-live/` (git-ignored) by `issue-chain-lesr-subunit.sh` from `server-lesr.config.yaml.tmpl` (the ECR equivalents are `server-ecr.config*.yaml`).
 
 ### Troubleshooting
 
@@ -215,8 +242,9 @@ curl -H "CESR-DESTINATION: BBilc4-L3tFUnfM_wJr4S4OJanAv_VmF_dJNN6vkf2Ha" \
 - **Registrar 404 on `/credential/<said>?chains=true`**: the chain was not imported into the Registrar keystore; rerun the issue script with `--reset`.
 - **Port conflicts**: witnesses use 5642-5644, vLEI-server 7723, echelon 8000, registrar 8080.
 - **Grants not appearing in Locksmith**: grants are admitted by a background doer every ~2s once the issuer OOBIs (`SIGNET_DEV_OOBIS`) have resolved; also each time the Add Connection dialog loads.
-- **No credential in the dropdown**: the credential must be admitted in the vault, which needs the earlier chain grants admitted first (LESR: QVI, LE, LE Subunit and LESR Auth; ECR: QVI, LE and ECR Auth). Also check that `SIGNET_CREDENTIAL_SCHEMAS` (from `env.out`) names the chain you issued; unset, only the LESR is listed (set it to the ECR SAID for the ECR chain).
-- **Switching between the ECR and LESR chains**: both share the keystore base `signet-dev-live` and `generated/`, so run the other issue script with `--reset` (and restart Locksmith with the new `env.out`). `--reset` keeps `generated/schemas`.
+- **No credential in the dropdown**: the credential must be admitted in the vault, which needs the earlier chain grants admitted first (LESR subunit: QVI, LE, LE Subunit and LESR Auth; LESR simple: QVI, LE and LESR Auth; ECR: QVI, LE and ECR Auth). Also check that `SIGNET_CREDENTIAL_SCHEMAS` (from `env.out`) names the chain you issued; unset, only the LESR is listed (set it to the ECR SAID for the ECR chain).
+- **Switching between the ECR and LESR chains** (any two of the three): all share the keystore base `signet-dev-live` and `generated/`, so run the other issue script with `--reset` (and restart Locksmith with the new `env.out`). `--reset` keeps `generated/schemas`.
+- **`issue-chain-lesr-simple.sh` times out waiting for the LESR Auth**: Locksmith must be restarted with `env.out` (`SIGNET_DEV_LESR_AUTH_FILE` set), must have admitted the QVI and LE credentials, and the holder must be receipted by its witnesses; look for `LESR Auth step failed (retrying)` in the Locksmith log. The step retries every 60s.
 - **Schema OOBI returns 200 with an empty body**, or the issue script's preflight fails: the vLEI-server is not serving the combined schema dir; run `serve-schemas.sh` and restart it with `-s .../generated/schemas`.
 
 With `server-lesr.config.review.yaml` (or `server-ecr.config.review.yaml`; empty whitelist) the gate is never offered while pending; a DCR sent without an approved record returns 403 `access_denied`.

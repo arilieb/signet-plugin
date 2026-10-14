@@ -15,6 +15,7 @@ castellan/core/remoting.py), so callers can use the same result['success']
 check idiom.
 """
 
+import base64
 import html
 import json
 import re
@@ -30,6 +31,9 @@ from . import mock_data
 from .configing import (
     is_json_format,
     is_keri_discovery_url,
+    export_method,
+    export_status_url_prefix,
+    fhir_base_url_override,
     is_mock_mode,
     onboarding_endpoint_override,
     onboarding_server_aid,
@@ -41,6 +45,9 @@ from .presenting import ASSERTION_TYPE
 logger = help.ogler.getLogger(__name__)
 
 _TIMEOUT = 30.0
+
+# exportType requested in the $davinci-data-export POST body.
+EXPORT_TYPE = "hl7.fhir.us.davinci-pdex#provider-snapshot"
 
 
 def _loggable_body(content_type: str, body: bytes) -> str:
@@ -79,7 +86,7 @@ def _html_error_summary(text: str) -> str:
     return "\n".join(parts)
 
 
-def _log_response(response: httpx.Response):
+def _log_response(response: httpx.Response, label: str = "Onboarding"):
     """
     Log status, all headers and the body (to diagnose a bare 4xx/5xx).
 
@@ -95,12 +102,12 @@ def _log_response(response: httpx.Response):
         saved = f" full_body_saved_to={path}"
         body = repr(text[:300])
     logger.info(
-        f"Onboarding response: {response.status_code} {response.reason_phrase} "
+        f"{label} response: {response.status_code} {response.reason_phrase} "
         f"url={response.url} headers={dict(response.headers)} body={body}{saved}"
     )
     summary = _html_error_summary(text) if saved else ""
     if summary:
-        logger.info(f"Onboarding response error page:\n{summary}")
+        logger.info(f"{label} response error page:\n{summary}")
 
 
 def _error_result(response: httpx.Response) -> Dict[str, Any]:
@@ -393,6 +400,11 @@ async def request_access_token(
                 "status_code": response.status_code,
                 "correlation_id": "",
             }
+        logger.info(
+            f"Token response from {token_endpoint}: "
+            f"{ {k: v for k, v in data.items() if k not in _SECRET_TOKEN_FIELDS} } "
+            f"(headers={dict(response.headers)})"
+        )
         return {
             "success": True,
             "access_token": data["access_token"],
@@ -406,40 +418,303 @@ async def request_access_token(
         return {"success": False, "error": str(e)}
 
 
-async def get_groups(
-    connection,
-) -> Dict[str, Any]:
+def fhir_base_url(connection) -> str:
     """
-    GET the onboarding status -- ``poll_url`` (from Content-Location) if known,
-    else {base_url}/udap/onboarding/{onboarding_id}.
+    FHIR base URL of ``connection``: SIGNET_FHIR_BASE_URL if set, else its ``base_url``
+    with any ``/.well-known/...`` discovery path stripped.
+    """
+    override = fhir_base_url_override()
+    base = override or connection.base_url.split("/.well-known/", 1)[0].rstrip("/")
+    logger.info(
+        f"FHIR base URL: {base} (connection base_url={connection.base_url!r}, "
+        f"SIGNET_FHIR_BASE_URL={override!r})"
+    )
+    return base
 
-    202 means the decision is still pending (non-terminal); 200 means a
-    terminal decision has been made.
+
+def _fhir_headers(connection) -> Dict[str, str]:
+    """Bearer authorization from the connection's stored token, and FHIR JSON Accept."""
+    return {
+        "Authorization": f"{connection.token_type or 'Bearer'} {connection.access_token}",
+        "Accept": "application/fhir+json",
+    }
+
+
+_SECRET_TOKEN_FIELDS = ("access_token", "refresh_token")
+_LOGGED_CLAIMS = ("iss", "aud", "sub", "client_id", "scope", "exp", "iat")
+
+
+def _token_claims(token: str) -> str:
+    """Issuer-side claims of a JWT access token, for the log; the token and signature are never included."""
+    parts = token.split(".")
+    if len(parts) != 3:
+        return "opaque token"
+    try:
+        payload = parts[1] + "=" * (-len(parts[1]) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+    except ValueError:
+        return "undecodable token"
+    if not isinstance(claims, dict):
+        return "undecodable token"
+    return json.dumps({k: claims[k] for k in _LOGGED_CLAIMS if k in claims})
+
+
+def _log_fhir_request(connection, method: str, url: str):
+    """Log a FHIR request; the bearer token itself is never logged."""
+    logger.info(
+        f"FHIR request: {method} {url} "
+        f"(token_type={connection.token_type!r}, token_scope={connection.token_scope!r}, "
+        f"token_expires_at={connection.token_expires_at!r}, "
+        f"token_claims={_token_claims(connection.access_token)})"
+    )
+
+
+def _fhir_error_result(response: httpx.Response, scope: str = "") -> Dict[str, Any]:
+    """
+    Failure dict from a 4xx/5xx FHIR response.
+
+    An OperationOutcome's issue ``diagnostics`` / ``details.text`` become the message;
+    anything else falls back to ``_error_result``. 401/403 name the granted ``scope``.
+    """
+    result = _error_result(response)
+    result["error"] = f"{result['error']} ({response.request.method} {response.url})"
+    try:
+        data = response.json()
+    except ValueError:
+        data = None
+    if isinstance(data, dict) and data.get("resourceType") == "OperationOutcome":
+        messages = [
+            issue.get("diagnostics") or (issue.get("details") or {}).get("text")
+            for issue in data.get("issue") or []
+            if isinstance(issue, dict)
+        ]
+        messages = [message for message in messages if message]
+        if messages:
+            result["error"] = "; ".join(messages)
+    if response.status_code in (401, 403):
+        granted = f" (granted scope: {scope})" if scope else ""
+        result["error"] = (
+            f"Access denied by the FHIR server ({response.status_code}){granted}: "
+            f"{result['error']}"
+        )
+    return result
+
+
+def _group_name(resource: Dict[str, Any]) -> str:
+    """Display name of a Group: name, first identifier, code text, else its id."""
+    identifiers = resource.get("identifier") or [{}]
+    return (
+        resource.get("name")
+        or identifiers[0].get("value")
+        or (resource.get("code") or {}).get("text")
+        or resource.get("id", "")
+    )
+
+
+def _next_link(bundle: Dict[str, Any]) -> str:
+    for link in bundle.get("link") or []:
+        if link.get("relation") == "next" and link.get("url"):
+            return link["url"]
+    return ""
+
+
+async def get_groups(connection) -> Dict[str, Any]:
+    """
+    The Groups the connection may export, as ``{"success": True, "groups": [{"id", "name"}]}``.
+
+    For now a static list (``mock_data.STATIC_GROUP_IDS``) outside mock mode; the partner's
+    ``GET /Group`` is not used until it responds reliably (see ``fetch_groups``).
+    """
+    if is_mock_mode():
+        return {"success": True, **mock_data.fhir_groups(connection.connection_id)}
+    return {
+        "success": True,
+        "groups": [
+            {"id": group_id, "name": group_id}
+            for group_id in mock_data.STATIC_GROUP_IDS
+        ],
+    }
+
+
+async def fetch_groups(connection) -> Dict[str, Any]:
+    """
+    GET {fhir_base}/Group with the connection's bearer token, following Bundle
+    ``next`` links -- the Groups the connection may export, as
+    ``{"success": True, "groups": [{"id", "name"}]}``.
+
+    The caller authenticates first (``ensure_authenticated``) so the connection
+    carries a fresh token.
     """
     try:
-        base_url = connection.base_url
+        url = f"{fhir_base_url(connection)}/Group"
+        groups: list[Dict[str, str]] = []
+        seen_urls: set = set()
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            response = await client.get(f"{base_url}/Group")
-
-        if response.status_code in (200, 202):
-            return response.json()
-        return _error_result(response)
+            while url and url not in seen_urls:
+                seen_urls.add(url)
+                _log_fhir_request(connection, "GET", url)
+                response = await client.get(url, headers=_fhir_headers(connection))
+                _log_response(response, "FHIR")
+                if response.status_code != 200:
+                    return _fhir_error_result(response, connection.token_scope)
+                bundle = response.json()
+                for entry in bundle.get("entry") or []:
+                    resource = entry.get("resource") or {}
+                    if resource.get("id"):
+                        groups.append(
+                            {"id": resource["id"], "name": _group_name(resource)}
+                        )
+                url = urljoin(url, _next_link(bundle)) if _next_link(bundle) else ""
+        return {"success": True, "groups": groups}
     except Exception as e:
-        logger.error(f"Error polling onboarding status: {e}")
+        logger.error(f"Error listing FHIR Groups: {e}")
         return {"success": False, "error": str(e)}
 
 
 async def davinci_data_export(connection, group_id) -> Dict[str, Any]:
-    try:
-        base_url = connection.base_url
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            response = await client.post(
-                f"{base_url}/Group/{group_id}/$davinci-data-export"
-            )
+    """
+    Kick off ``Group/{group_id}/$davinci-data-export`` asynchronously (``Prefer:
+    respond-async``). 202 returns the ``Content-Location`` status URL to poll,
+    resolved against the FHIR base (SIGNET_EXPORT_STATUS_URL_PREFIX + the task id replaces a
+    status URL the server advertises wrongly); SIGNET_EXPORT_METHOD picks GET or POST (the ATR spec allows both).
+    """
+    if is_mock_mode():
+        return mock_data.mock_davinci_data_export()
 
-        if response.status_code in (200, 202):
-            return response.json()
-        return _error_result(response)
+    try:
+        base = fhir_base_url(connection)
+        url = f"{base}/Group/{group_id}/$davinci-data-export/"
+        headers = {**_fhir_headers(connection), "Prefer": "respond-async"}
+        method = export_method()
+        _log_fhir_request(connection, method, url)
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            if method == "POST":
+                body = {"exportType": EXPORT_TYPE}
+                logger.info(f"FHIR request body: {json.dumps(body)}")
+                response = await client.post(
+                    url,
+                    headers={**headers, "Content-Type": "application/fhir+json"},
+                    json=body,
+                )
+            else:
+                response = await client.get(url, headers=headers)
+        _log_response(response, "FHIR")
+
+        if response.status_code != 202:
+            if response.status_code < 300:
+                return {
+                    "success": False,
+                    "error": f"Unexpected export response: {response.status_code}",
+                }
+            return _fhir_error_result(response, connection.token_scope)
+        location = response.headers.get("Content-Location", "")
+        if not location:
+            return {
+                "success": False,
+                "error": "The server gave no status URL (Content-Location) to poll.",
+            }
+        status_url = urljoin(f"{base}/", location)
+        prefix = export_status_url_prefix()
+        if prefix:
+            task_id = urlsplit(status_url).path.rstrip("/").rsplit("/", 1)[-1]
+            logger.info(
+                f"Overriding export status URL {status_url} with {prefix}{task_id}"
+            )
+            status_url = f"{prefix}{task_id}"
+        return {"success": True, "status_url": status_url}
     except Exception as e:
-        logger.error(f"Error polling onboarding status: {e}")
+        logger.error(f"Error starting data export: {e}")
+        return {"success": False, "error": str(e)}
+
+
+_TASK_PENDING = {"draft", "requested", "received", "accepted", "ready", "in-progress"}
+_TASK_FAILED = {"failed", "cancelled", "rejected", "entered-in-error"}
+
+
+def _output_files(data: Dict[str, Any], status_url: str) -> list[Dict[str, str]]:
+    """File ``{type, url}`` entries of a bulk manifest or a completed Task's ``output``."""
+    files = []
+    for item in data.get("output") or []:
+        kind = item.get("type")
+        if isinstance(kind, dict):  # Task.output: type is a CodeableConcept
+            codings = kind.get("coding") or [{}]
+            kind = kind.get("text") or codings[0].get("code") or ""
+        url = (
+            item.get("url")
+            or item.get("valueUri")
+            or item.get("valueUrl")
+            or (item.get("valueReference") or {}).get("reference")
+        )
+        if url:
+            files.append({"type": kind or "", "url": urljoin(status_url, url)})
+    return files
+
+
+async def poll_export_status(connection, status_url: str) -> Dict[str, Any]:
+    """
+    GET the export ``status_url``. 202 (or an in-progress Task) is
+    ``{"state": "pending", "retry_after"}``; 200 is ``{"state": "complete",
+    "files": [{"type", "url"}]}``, parsed from the manifest or Task output.
+    """
+    if is_mock_mode():
+        return mock_data.mock_poll_export_status()
+
+    try:
+        _log_fhir_request(connection, "GET", status_url)
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            response = await client.get(status_url, headers=_fhir_headers(connection))
+        _log_response(response, "FHIR")
+
+        retry_after = response.headers.get("Retry-After", "")
+        if response.status_code == 202:
+            return {"success": True, "state": "pending", "retry_after": retry_after}
+        if response.status_code != 200:
+            return _fhir_error_result(response, connection.token_scope)
+
+        data = response.json()
+        if data.get("resourceType") == "Task":
+            status = data.get("status", "")
+            if status in _TASK_PENDING:
+                return {"success": True, "state": "pending", "retry_after": retry_after}
+            if status in _TASK_FAILED:
+                return {"success": False, "error": f"Data export {status}."}
+        return {
+            "success": True,
+            "state": "complete",
+            "files": _output_files(data, status_url),
+        }
+    except Exception as e:
+        logger.error(f"Error polling export status: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def download_export_file(
+    connection, url: str, dest_dir: Path, filename: str = ""
+) -> Dict[str, Any]:
+    """Stream the export file at ``url`` into ``dest_dir`` -> ``{"path", "bytes"}``."""
+    name = Path(filename or urlsplit(url).path.rstrip("/").rsplit("/", 1)[-1]).name
+    name = name or "export.ndjson"
+    dest_dir = Path(dest_dir)
+    if is_mock_mode():
+        return mock_data.mock_download_export_file(dest_dir, name)
+
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        path = dest_dir / name
+        _log_fhir_request(connection, "GET", url)
+        headers = {**_fhir_headers(connection), "Accept": "application/fhir+ndjson"}
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            async with client.stream("GET", url, headers=headers) as response:
+                if response.status_code != 200:
+                    await response.aread()
+                    _log_response(response, "FHIR")
+                    return _fhir_error_result(response, connection.token_scope)
+                size = 0
+                with path.open("wb") as out:
+                    async for chunk in response.aiter_bytes():
+                        out.write(chunk)
+                        size += len(chunk)
+        return {"success": True, "path": str(path), "bytes": size}
+    except Exception as e:
+        logger.error(f"Error downloading export file: {e}")
         return {"success": False, "error": str(e)}

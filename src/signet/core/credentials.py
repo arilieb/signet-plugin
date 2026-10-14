@@ -7,7 +7,9 @@ the accepted set (SIGNET_CREDENTIAL_SCHEMAS, default the LESR), presented when
 submitting a UDAP vLEI onboarding request.
 
 The ECR chain is GLEIF External -> QVI -> LE -> ECR Auth -> ECR; the LESR chain
-is External -> QVI -> LE -> LE Subunit -> LESR Auth -> LESR (ONBOARDING.md S4.6).
+is External -> QVI -> LE -> LE Subunit -> LESR Auth -> LESR (ONBOARDING.md S4.6); the
+simple LESR chain, for orgs without subunits, is External -> QVI -> LE -> LESR Auth
+(`le` edge, issued by the LE AID) -> LESR.
 The default LESR SAID (configing.LESR_SCHEMA_SAID) may change on re-saidification;
 SIGNET_CREDENTIAL_SCHEMAS overrides it.
 """
