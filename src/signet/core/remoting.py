@@ -695,7 +695,9 @@ async def poll_export_status(connection, status_url: str) -> Dict[str, Any]:
         }
     except httpx.TimeoutException as e:
         # The export may well still be running; the caller polls again.
-        logger.warning(f"Export status poll timed out ({_exception_message(e)}); will retry")
+        logger.warning(
+            f"Export status poll timed out ({_exception_message(e)}); will retry"
+        )
         return {"success": True, "state": "pending", "retry_after": ""}
     except Exception as e:
         logger.error(f"Error polling export status: {_exception_message(e)}")

@@ -63,7 +63,10 @@ def known_partner(url: str) -> tuple[str, str] | None:
 def apply_known_partner(connection: SignetConnection) -> bool:
     """Bring a stored connection's name and logo in line with KNOWN_PARTNERS; True if it changed."""
     partner = known_partner(connection.base_url)
-    if partner is None or (connection.display_name, connection.logo_icon_path) == partner:
+    if (
+        partner is None
+        or (connection.display_name, connection.logo_icon_path) == partner
+    ):
         return False
     connection.display_name, connection.logo_icon_path = partner
     return True

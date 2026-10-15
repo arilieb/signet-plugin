@@ -104,7 +104,9 @@ def _fake_clock(monkeypatch):
 async def test_run_export_backs_off_to_retry_after(monkeypatch):
     sleeps = _fake_clock(monkeypatch)
     pending = {"success": True, "state": "in-progress", "retry_after": "10"}
-    page = _ExportPage([pending] * 6 + [{"success": True, "state": "complete", "files": []}])
+    page = _ExportPage(
+        [pending] * 6 + [{"success": True, "state": "complete", "files": []}]
+    )
 
     await FhirApisListPage._run_export(page, 1, "c1", "g1")
 

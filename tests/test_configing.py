@@ -178,7 +178,8 @@ def test_dcr_env_readers(monkeypatch, reader, var):
 def test_known_partner_gets_name_and_logo(monkeypatch):
     _env(monkeypatch, Environments.PRODUCTION)
     monkeypatch.setenv(
-        "SIGNET_PARTNER_URL", "https://api-dmdh-dev.safhir.io/slapv3/pdexv2/.well-known/keri"
+        "SIGNET_PARTNER_URL",
+        "https://api-dmdh-dev.safhir.io/slapv3/pdexv2/.well-known/keri",
     )
     (partner,) = mock_data.discoverable_connections()
     assert partner["display_name"] == "Onyx"
