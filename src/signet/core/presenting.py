@@ -339,6 +339,8 @@ def build_token_assertion(vault, connection) -> str:
 def witness_oobi_urls(hab, pre: str | None = None) -> list[str]:
     """Witness-hosted OOBI URLs for ``pre`` (default ``hab.pre``) (ONBOARDING.md S5, D15)."""
     pre = pre or hab.pre
+    if configing.assume_palantir_oobis():
+        return [f"https://palantir.healthkeri.net/oobi/{pre}"]
     urls = []
     witnesses = hab.fetchWitnessUrls(cid=pre).get("witness") or {}
     for surls in witnesses.values():
