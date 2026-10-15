@@ -137,6 +137,17 @@ def test_onboarding_oobi_override(monkeypatch):
     ]
 
 
+def test_assume_palantir_oobis(monkeypatch):
+    monkeypatch.delenv("SIGNET_ASSUME_PALANTIR_OOBIS", raising=False)
+    assert configing.assume_palantir_oobis() is False
+    for value in ("1", " TRUE "):
+        monkeypatch.setenv("SIGNET_ASSUME_PALANTIR_OOBIS", value)
+        assert configing.assume_palantir_oobis() is True
+    for value in ("0", "false", ""):
+        monkeypatch.setenv("SIGNET_ASSUME_PALANTIR_OOBIS", value)
+        assert configing.assume_palantir_oobis() is False
+
+
 def test_is_json_format(monkeypatch):
     monkeypatch.delenv("SIGNET_ONBOARDING_FORMAT", raising=False)
     assert not configing.is_json_format()

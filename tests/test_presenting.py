@@ -22,6 +22,65 @@ def test_build_oobis_requires_witness(hab):
         presenting.build_oobis(hab, "ESAID")
 
 
+_REAL_WITNESS_OOBI_URLS = presenting.witness_oobi_urls
+
+
+class _WitnessedHab:
+    """Stand-in hab whose single witness is reachable at ``surls``."""
+
+    pre = "Ehab"
+
+    def __init__(self, surls):
+        self._surls = surls
+
+    def fetchWitnessUrls(self, cid):
+        return {"witness": {"Ewit": self._surls}}
+
+
+class _NoFetchHab:
+    pre = "Ehab"
+
+    def fetchWitnessUrls(self, cid):
+        raise AssertionError("keripy witness lookup must be skipped")
+
+
+def test_witness_oobi_urls_from_witnesses(monkeypatch):
+    monkeypatch.delenv("SIGNET_ASSUME_PALANTIR_OOBIS", raising=False)
+    hab = _WitnessedHab({"http": "http://w:5642/", "https": "https://w:5643"})
+    assert presenting.witness_oobi_urls(hab) == ["https://w:5643/oobi/Ehab"]
+    assert presenting.witness_oobi_urls(hab, "Eother") == ["https://w:5643/oobi/Eother"]
+
+
+def test_witness_oobi_urls_assume_palantir(monkeypatch):
+    monkeypatch.setenv("SIGNET_ASSUME_PALANTIR_OOBIS", "1")
+    hab = _NoFetchHab()
+    assert presenting.witness_oobi_urls(hab) == [
+        "https://palantir.healthkeri.net/oobi/Ehab"
+    ]
+    assert presenting.witness_oobi_urls(hab, "Eother") == [
+        "https://palantir.healthkeri.net/oobi/Eother"
+    ]
+
+
+def test_build_oobis_assume_palantir_needs_no_witness(monkeypatch, hab):
+    monkeypatch.setenv("SIGNET_ASSUME_PALANTIR_OOBIS", "true")
+    monkeypatch.setenv("SIGNET_REGISTRAR_URL", "http://reg")
+    oobis = presenting.build_oobis(hab, "ESAID", le_aid="Ele")
+    assert oobis[:2] == [
+        {
+            "type": "aid",
+            "aid": hab.pre,
+            "url": f"https://palantir.healthkeri.net/oobi/{hab.pre}",
+        },
+        {
+            "type": "aid",
+            "aid": "Ele",
+            "url": "https://palantir.healthkeri.net/oobi/Ele",
+        },
+    ]
+    assert oobis[2]["type"] == "credential"
+
+
 def test_build_request_unknown_holder(monkeypatch, hab):
     monkeypatch.setattr(configing, "is_mock_mode", lambda: False)
 
@@ -370,6 +429,38 @@ def test_build_packet_oobi_override_wins(monkeypatch, hab):
     assert legal_entity["oobi"] == ["http://a/oobi/x", "http://b/oobi/x"]
 
 
+def test_build_packet_assume_palantir_oobis(monkeypatch, hab):
+    import json
+
+    said = _packet_setup(monkeypatch, hab, le=("Ele", "LEI123"))
+    monkeypatch.setattr(presenting, "witness_oobi_urls", _REAL_WITNESS_OOBI_URLS)
+    monkeypatch.setenv("SIGNET_ASSUME_PALANTIR_OOBIS", "1")
+    req = presenting.build_onboarding_packet(
+        _vault(hab, hab.pre),
+        {"said": said, "holder_pre": hab.pre},
+        "http://s/o",
+        "Esrv",
+    )
+    legal_entity = json.loads(req.body)["legal_entity"]
+    assert legal_entity["oobi"] == ["https://palantir.healthkeri.net/oobi/Ele"]
+
+
+def test_build_packet_oobi_override_beats_assume_palantir(monkeypatch, hab):
+    import json
+
+    said = _packet_setup(monkeypatch, hab, le=("Ele", "LEI123"))
+    monkeypatch.setattr(presenting, "witness_oobi_urls", _REAL_WITNESS_OOBI_URLS)
+    monkeypatch.setenv("SIGNET_ASSUME_PALANTIR_OOBIS", "1")
+    monkeypatch.setenv("SIGNET_ONBOARDING_OOBI", "http://a/oobi/x")
+    req = presenting.build_onboarding_packet(
+        _vault(hab, hab.pre),
+        {"said": said, "holder_pre": hab.pre},
+        "http://s/o",
+        "Esrv",
+    )
+    assert json.loads(req.body)["legal_entity"]["oobi"] == ["http://a/oobi/x"]
+
+
 def test_build_packet_requires_server_aid(monkeypatch, hab):
     said = _packet_setup(monkeypatch, hab)
     with pytest.raises(
@@ -599,6 +690,23 @@ def test_build_dcr_request_json_fresh_dt(monkeypatch, hab):
 
 def test_build_dcr_request_json_oobi_override(monkeypatch, hab):
     _dcr_json_setup(monkeypatch, hab)
+    monkeypatch.setenv("SIGNET_DCR_OOBI", "http://o/oobi/E9")
+    body = presenting.build_dcr_request_json(_HabVault(hab), _dcr_connection(hab))
+    assert body["oobi"] == "http://o/oobi/E9"
+
+
+def test_build_dcr_request_json_assume_palantir_oobis(monkeypatch, hab):
+    _dcr_json_setup(monkeypatch, hab)
+    monkeypatch.setattr(presenting, "witness_oobi_urls", _REAL_WITNESS_OOBI_URLS)
+    monkeypatch.setenv("SIGNET_ASSUME_PALANTIR_OOBIS", "1")
+    body = presenting.build_dcr_request_json(_HabVault(hab), _dcr_connection(hab))
+    assert body["oobi"] == f"https://palantir.healthkeri.net/oobi/{hab.pre}"
+
+
+def test_build_dcr_request_json_oobi_override_beats_assume_palantir(monkeypatch, hab):
+    _dcr_json_setup(monkeypatch, hab)
+    monkeypatch.setattr(presenting, "witness_oobi_urls", _REAL_WITNESS_OOBI_URLS)
+    monkeypatch.setenv("SIGNET_ASSUME_PALANTIR_OOBIS", "1")
     monkeypatch.setenv("SIGNET_DCR_OOBI", "http://o/oobi/E9")
     body = presenting.build_dcr_request_json(_HabVault(hab), _dcr_connection(hab))
     assert body["oobi"] == "http://o/oobi/E9"

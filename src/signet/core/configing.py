@@ -104,6 +104,14 @@ def onboarding_oobi_override() -> list[str]:
     return [oobi.strip() for oobi in raw.split(",") if oobi.strip()]
 
 
+def assume_palantir_oobis() -> bool:
+    """True when every OOBI is assumed to be hosted at ``https://palantir.healthkeri.net/oobi/{aid}`` instead of derived from keripy witness records (SIGNET_ASSUME_PALANTIR_OOBIS=1|true)."""
+    return os.environ.get("SIGNET_ASSUME_PALANTIR_OOBIS", "").strip().lower() in (
+        "1",
+        "true",
+    )
+
+
 def registration_endpoint_override() -> str:
     """Registration endpoint replacing the advertised one in the json format (SIGNET_REGISTRATION_ENDPOINT)."""
     return os.environ.get("SIGNET_REGISTRATION_ENDPOINT", "").strip()
