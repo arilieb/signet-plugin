@@ -9,11 +9,12 @@ token); only on success does the (future) downstream action run.
 """
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Any
 
 import qasync
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFileDialog, QLabel, QVBoxLayout, QWidget
 from keri import help
 
 from locksmith.ui import colors
@@ -22,20 +23,27 @@ from locksmith.ui.toolkit.widgets.fields import FloatingLabelComboBox
 from locksmith.ui.toolkit.widgets.page import LocksmithFormPage, guarded
 from signet.core import remoting
 
-from ..connections.authenticate import ensure_authenticated
+from ..connections.authenticate import authenticate_connection, ensure_authenticated
 
 logger = help.ogler.getLogger(__name__)
 
 _API_ICON = ":/assets/material-icons/api.svg"
 _INTRO_TEXT = "To get started with PDex Member Match, select a connection from the dropdown below."
 _EXPORT_COLUMNS = ["File", "Type", "Size", "Status"]
-_EXPORT_DIR = Path.home() / "signet-exports"
+_LOADING_STATE_HEIGHT = 240
 _DEFAULT_POLL_SECONDS = 5.0
-_MAX_POLL_SECONDS = 60.0
-_MAX_POLLS = 120
+_MAX_POLL_SECONDS = 120.0
+_INITIAL_POLL_SECONDS = 1.0
+_BACKOFF_FACTOR = 2.0
+_MAX_EXPORT_SECONDS = 600.0
 _NO_CONNECTIONS_TEXT = (
     "No active connections available. Register a connection on the Connections page."
 )
+
+
+def _poll_delay(attempt: int, ceiling: float) -> float:
+    """Exponential backoff from the initial delay, capped at the server's Retry-After."""
+    return min(_INITIAL_POLL_SECONDS * _BACKOFF_FACTOR**attempt, ceiling)
 
 
 class FhirApisListPage(LocksmithFormPage):
@@ -106,13 +114,16 @@ class FhirApisListPage(LocksmithFormPage):
         self.table = PaginatedTableWidget(
             columns=_EXPORT_COLUMNS,
             column_widths={"Type": 140, "Size": 100, "Status": 140},
-            title="DaVinci Data Export",
+            title="Export Files",
             show_add_button=False,
             icon_path=_API_ICON,
             items_per_page=10,
             parent=self,
         )
         self.table.row_clicked.connect(self._on_row_clicked)
+        # Default is a full page of rows (500px), which runs off a small window; the
+        # loading box inside it is 180px, so fit the frame to that.
+        self.table.loading_state.setFixedHeight(_LOADING_STATE_HEIGHT)
         self.table.hide()
 
         self.content_layout.addWidget(self.table)
@@ -177,21 +188,39 @@ class FhirApisListPage(LocksmithFormPage):
         finally:
             self._connection_selector.blockSignals(False)
 
-    async def _authorized_connection(self, connection_id: str):
+    async def _authorized_connection(self, connection_id: str, force: bool = False):
         """
-        Authenticate (reusing a still-valid token) and return the connection re-read from
-        the db, so it carries the fresh access token. Raises RuntimeError on failure.
+        Authenticate (reusing a still-valid token unless ``force``) and return the connection
+        re-read from the db, so it carries the fresh access token. Raises RuntimeError on failure.
         """
         db = self._get_db()
         if db is None:
             raise RuntimeError("No signet database available.")
-        result = await ensure_authenticated(self.app.vault, db, connection_id)
+        authenticate = authenticate_connection if force else ensure_authenticated
+        result = await authenticate(self.app.vault, db, connection_id)
         if not result.get("success"):
             raise RuntimeError(result.get("error", "Authentication failed."))
         connection = db.signet_connections.get(keys=(connection_id,))
         if connection is None:
             raise RuntimeError("Connection not found.")
         return connection
+
+    async def _call_authorized(self, connection_id: str, call) -> dict[str, Any]:
+        """
+        ``await call(connection)`` with an authorized connection. A 401/403 may be a token the
+        server no longer accepts although it has not expired, so re-authenticate once for a
+        fresh token and retry.
+        """
+        connection = await self._authorized_connection(connection_id)
+        result = await call(connection)
+        if result.get("status_code") in (401, 403):
+            logger.warning(
+                f"FHIR server answered {result['status_code']}; "
+                "re-authenticating for a fresh token and retrying once"
+            )
+            connection = await self._authorized_connection(connection_id, force=True)
+            result = await call(connection)
+        return result
 
     @qasync.asyncSlot(int)
     async def _on_connection_changed(self, index: int):
@@ -270,21 +299,26 @@ class FhirApisListPage(LocksmithFormPage):
         except Exception as exc:
             logger.exception(f"FHIR data export failed: {exc}")
             if run == self._export_run:
+                self.table.hide()
                 self.show_error(f"Data export failed: {exc}")
 
-    def _show_export_rows(self, rows: list[dict[str, Any]]):
-        self.table.set_static_data(rows)
+    def _show_loading(self):
+        self.table.show_loading()
+        self.table.show()
+
+    def _set_table_rows(self, rows: list[dict[str, Any]], keep_view: bool = False):
+        self.table.set_static_data(rows, keep_view=keep_view)
         self.table.show()
 
     async def _run_export(self, run: int, connection_id: str, group_id: str):
         self._export_group_id = group_id
         self._export_rows = {}
-        self._show_export_rows(
-            [{"File": "Data export", "Type": "", "Size": "", "Status": "Requested"}]
-        )
+        self._show_loading()
 
-        connection = await self._authorized_connection(connection_id)
-        kickoff = await remoting.davinci_data_export(connection, group_id)
+        kickoff = await self._call_authorized(
+            connection_id,
+            lambda connection: remoting.davinci_data_export(connection, group_id),
+        )
         if run != self._export_run:
             return
         if not kickoff.get("success"):
@@ -293,10 +327,15 @@ class FhirApisListPage(LocksmithFormPage):
             return
 
         status_url = kickoff["status_url"]
-        for _ in range(_MAX_POLLS):
+        ceiling = _DEFAULT_POLL_SECONDS  # Retry-After: the backoff's upper bound
+        deadline = time.monotonic() + _MAX_EXPORT_SECONDS
+        attempt = 0
+        while time.monotonic() < deadline:
             # Re-authenticates if the token expired while waiting
-            connection = await self._authorized_connection(connection_id)
-            status = await remoting.poll_export_status(connection, status_url)
+            status = await self._call_authorized(
+                connection_id,
+                lambda connection: remoting.poll_export_status(connection, status_url),
+            )
             if run != self._export_run:
                 return
             if not status.get("success"):
@@ -306,21 +345,14 @@ class FhirApisListPage(LocksmithFormPage):
             if status["state"] == "complete":
                 self._show_export_files(status.get("files", []))
                 return
-            self._show_export_rows(
-                [
-                    {
-                        "File": "Data export",
-                        "Type": "",
-                        "Size": "",
-                        "Status": "In progress",
-                    }
-                ]
-            )
             try:
-                delay = float(status.get("retry_after") or _DEFAULT_POLL_SECONDS)
+                # No Retry-After (e.g. a timed-out poll) keeps the previous ceiling
+                ceiling = float(status.get("retry_after") or ceiling)
             except ValueError:
-                delay = _DEFAULT_POLL_SECONDS
-            await asyncio.sleep(min(max(delay, 1.0), _MAX_POLL_SECONDS))
+                ceiling = _DEFAULT_POLL_SECONDS
+            ceiling = min(max(ceiling, 1.0), _MAX_POLL_SECONDS)
+            await asyncio.sleep(_poll_delay(attempt, ceiling))
+            attempt += 1
             if run != self._export_run:
                 return
 
@@ -341,19 +373,20 @@ class FhirApisListPage(LocksmithFormPage):
                 "url": file["url"],
             }
         if not self._export_rows:
-            self._show_export_rows(
-                [{"File": "No files", "Type": "", "Size": "", "Status": "Complete"}]
-            )
+            self._set_table_rows([])  # the table's empty state
             return
-        self._refresh_export_rows()
+        self.table.clear_search()  # a new export starts unfiltered, on page 1
+        self._set_table_rows(self._export_table_rows())
+
+    def _export_table_rows(self) -> list[dict[str, Any]]:
+        return [
+            {column: row[column] for column in _EXPORT_COLUMNS}
+            for row in self._export_rows.values()
+        ]
 
     def _refresh_export_rows(self):
-        self._show_export_rows(
-            [
-                {column: row[column] for column in _EXPORT_COLUMNS}
-                for row in self._export_rows.values()
-            ]
-        )
+        """Redraw after a status change, staying on the page the user is on."""
+        self._set_table_rows(self._export_table_rows(), keep_view=True)
 
     @qasync.asyncSlot(object)
     async def _on_row_clicked(self, row_data: Any):
@@ -382,19 +415,29 @@ class FhirApisListPage(LocksmithFormPage):
             self._authenticating = False
 
     async def _on_authenticated_row(self, connection_id: str, row_data: dict[str, Any]):
-        """Download the clicked export file into the exports folder."""
+        """Ask where to save the clicked export file, then download it there."""
         row = self._export_rows.get(row_data.get("File", ""))
         if row is None:
-            return  # a status-only row
+            return  # a stale row, e.g. from a superseded export
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Export File",
+            str(Path.home() / row["File"]),
+            "NDJSON Files (*.ndjson);;All Files (*)",
+        )
+        if not file_path:
+            logger.info("Export file download cancelled")
+            return
+        destination = Path(file_path)
 
         row["Status"] = "Downloading"
         self._refresh_export_rows()
-        connection = await self._authorized_connection(connection_id)
-        result = await remoting.download_export_file(
-            connection,
-            row["url"],
-            _EXPORT_DIR / (self._export_group_id or "group"),
-            filename=row["File"],
+        result = await self._call_authorized(
+            connection_id,
+            lambda connection: remoting.download_export_file(
+                connection, row["url"], destination.parent, filename=destination.name
+            ),
         )
         if not result.get("success"):
             row["Status"] = "Failed"

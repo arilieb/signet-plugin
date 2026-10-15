@@ -142,6 +142,11 @@ class SignetPlugin(PluginBase):
         elif configing.is_live_dev():
             devbootstrap.bootstrap(vault)
 
+        # Connections store their name/logo at add time; refresh known partners.
+        for keys, connection in list(self._db.signet_connections.getItemIter()):
+            if mock_data.apply_known_partner(connection):
+                self._db.signet_connections.pin(keys=keys, val=connection)
+
     def on_vault_closed(self, vault) -> None:
         vault.plugin_state.pop("signet", None)
         if self._db:

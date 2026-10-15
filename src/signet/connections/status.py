@@ -21,6 +21,7 @@ ROW_ACTION_ICONS = {
     "Refresh": ":/assets/material-icons/refresh.svg",
     "Register": ":/assets/material-icons/shield_lock.svg",
     "Authenticate": ":/assets/material-icons/verified.svg",
+    "View": ":/assets/material-icons/view.svg",
     "Delete": ":/assets/material-icons/delete.svg",
 }
 
