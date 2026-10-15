@@ -47,6 +47,28 @@ DISCOVERABLE_CONNECTIONS: list[Dict[str, Any]] = [
     },
 ]
 
+# Real partners recognised by hostname: (display name, logo). Hosts not listed
+# here get the hostname and a generic icon.
+GENERIC_PARTNER_ICON = ":/assets/material-icons/identity_platform.svg"
+KNOWN_PARTNERS: dict[str, tuple[str, str]] = {
+    "api-dmdh-dev.safhir.io": ("Onyx", ":/assets/custom/logos/onyx-logo-black.png"),
+}
+
+
+def known_partner(url: str) -> tuple[str, str] | None:
+    """(display_name, logo_icon_path) for a known partner's URL, else None."""
+    return KNOWN_PARTNERS.get(urlparse(url).hostname or "")
+
+
+def apply_known_partner(connection: SignetConnection) -> bool:
+    """Bring a stored connection's name and logo in line with KNOWN_PARTNERS; True if it changed."""
+    partner = known_partner(connection.base_url)
+    if partner is None or (connection.display_name, connection.logo_icon_path) == partner:
+        return False
+    connection.display_name, connection.logo_icon_path = partner
+    return True
+
+
 # Tracks onboarding_ids that have already been polled once, so a freshly
 # submitted connection's immediate follow-up poll (see connections/add.py)
 # comes back non-terminal, and only turns terminal on the *next* poll (a
@@ -152,11 +174,12 @@ def discoverable_connections() -> list[Dict[str, Any]]:
     if configing.is_partner_url_set():
         url = configing.partner_url()
         host = urlparse(url).hostname or url
+        display_name, logo = known_partner(url) or (host, GENERIC_PARTNER_ICON)
         return [
             {
                 "connection_id": host.replace(".", "-"),
-                "display_name": host,
-                "logo_icon_path": ":/assets/material-icons/identity_platform.svg",
+                "display_name": display_name,
+                "logo_icon_path": logo,
                 "base_url": url,
                 "purpose": "TREAT",
             }

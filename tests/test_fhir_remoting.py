@@ -213,6 +213,24 @@ async def test_export_kickoff_error(monkeypatch):
     assert not r["success"] and r["status_code"] == 403
 
 
+async def test_export_kickoff_timeout_names_the_exception(monkeypatch):
+    def handler(request):
+        raise httpx.ReadTimeout("")
+
+    _patch(monkeypatch, handler)
+    r = await remoting.davinci_data_export(_connection(), "g1")
+    assert r == {"success": False, "error": "ReadTimeout"}
+
+
+async def test_poll_timeout_is_pending(monkeypatch):
+    def handler(request):
+        raise httpx.ReadTimeout("")
+
+    _patch(monkeypatch, handler)
+    r = await remoting.poll_export_status(_connection(), f"{FHIR}/s/1")
+    assert r == {"success": True, "state": "pending", "retry_after": ""}
+
+
 async def test_poll_pending(monkeypatch):
     _patch(monkeypatch, lambda req: httpx.Response(202, headers={"Retry-After": "7"}))
     r = await remoting.poll_export_status(_connection(), f"{FHIR}/s/1")

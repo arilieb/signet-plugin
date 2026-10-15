@@ -1,6 +1,7 @@
 import pytest
 from locksmith.core.configing import Environments, LocksmithConfig
 
+from signet.db.basing import SignetConnection
 from signet.core import configing, credentials, devbootstrap, mock_data
 
 
@@ -172,3 +173,35 @@ def test_dcr_env_readers(monkeypatch, reader, var):
     assert reader() == ""
     monkeypatch.setenv(var, " http://x/y ")
     assert reader() == "http://x/y"
+
+
+def test_known_partner_gets_name_and_logo(monkeypatch):
+    _env(monkeypatch, Environments.PRODUCTION)
+    monkeypatch.setenv(
+        "SIGNET_PARTNER_URL", "https://api-dmdh-dev.safhir.io/slapv3/pdexv2/.well-known/keri"
+    )
+    (partner,) = mock_data.discoverable_connections()
+    assert partner["display_name"] == "Onyx"
+    assert partner["logo_icon_path"].endswith("onyx-logo-black.png")
+
+
+def test_unknown_partner_keeps_host_and_generic_icon(monkeypatch):
+    _env(monkeypatch, Environments.PRODUCTION)
+    monkeypatch.setenv("SIGNET_PARTNER_URL", "https://other.example.com")
+    (partner,) = mock_data.discoverable_connections()
+    assert partner["display_name"] == "other.example.com"
+    assert partner["logo_icon_path"] == mock_data.GENERIC_PARTNER_ICON
+
+
+def test_apply_known_partner_updates_stored_connection():
+    stale = SignetConnection(
+        connection_id="x",
+        display_name="api-dmdh-dev.safhir.io",
+        logo_icon_path=mock_data.GENERIC_PARTNER_ICON,
+        base_url="https://api-dmdh-dev.safhir.io/slapv3/pdexv2/.well-known/keri",
+    )
+    assert mock_data.apply_known_partner(stale)
+    assert stale.display_name == "Onyx"
+    assert not mock_data.apply_known_partner(stale)  # idempotent
+    other = SignetConnection(connection_id="y", base_url="https://other.example.com")
+    assert not mock_data.apply_known_partner(other)

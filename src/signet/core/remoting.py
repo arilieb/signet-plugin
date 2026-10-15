@@ -45,6 +45,8 @@ from .presenting import ASSERTION_TYPE
 logger = help.ogler.getLogger(__name__)
 
 _TIMEOUT = 30.0
+# The partner's FHIR API can take well over 30s to answer (export kickoff, status polls).
+_FHIR_TIMEOUT = 120.0
 
 # exportType requested in the $davinci-data-export POST body.
 EXPORT_TYPE = "hl7.fhir.us.davinci-pdex#provider-snapshot"
@@ -472,6 +474,11 @@ def _log_fhir_request(connection, method: str, url: str):
     )
 
 
+def _exception_message(exc: Exception) -> str:
+    """``str(exc)`` prefixed with the exception type; httpx timeouts have an empty message."""
+    return f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+
+
 def _fhir_error_result(response: httpx.Response, scope: str = "") -> Dict[str, Any]:
     """
     Failure dict from a 4xx/5xx FHIR response.
@@ -552,7 +559,7 @@ async def fetch_groups(connection) -> Dict[str, Any]:
         url = f"{fhir_base_url(connection)}/Group"
         groups: list[Dict[str, str]] = []
         seen_urls: set = set()
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=_FHIR_TIMEOUT) as client:
             while url and url not in seen_urls:
                 seen_urls.add(url)
                 _log_fhir_request(connection, "GET", url)
@@ -570,8 +577,8 @@ async def fetch_groups(connection) -> Dict[str, Any]:
                 url = urljoin(url, _next_link(bundle)) if _next_link(bundle) else ""
         return {"success": True, "groups": groups}
     except Exception as e:
-        logger.error(f"Error listing FHIR Groups: {e}")
-        return {"success": False, "error": str(e)}
+        logger.error(f"Error listing FHIR Groups: {_exception_message(e)}")
+        return {"success": False, "error": _exception_message(e)}
 
 
 async def davinci_data_export(connection, group_id) -> Dict[str, Any]:
@@ -590,7 +597,7 @@ async def davinci_data_export(connection, group_id) -> Dict[str, Any]:
         headers = {**_fhir_headers(connection), "Prefer": "respond-async"}
         method = export_method()
         _log_fhir_request(connection, method, url)
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=_FHIR_TIMEOUT) as client:
             if method == "POST":
                 body = {"exportType": EXPORT_TYPE}
                 logger.info(f"FHIR request body: {json.dumps(body)}")
@@ -626,8 +633,8 @@ async def davinci_data_export(connection, group_id) -> Dict[str, Any]:
             status_url = f"{prefix}{task_id}"
         return {"success": True, "status_url": status_url}
     except Exception as e:
-        logger.error(f"Error starting data export: {e}")
-        return {"success": False, "error": str(e)}
+        logger.error(f"Error starting data export: {_exception_message(e)}")
+        return {"success": False, "error": _exception_message(e)}
 
 
 _TASK_PENDING = {"draft", "requested", "received", "accepted", "ready", "in-progress"}
@@ -655,7 +662,7 @@ def _output_files(data: Dict[str, Any], status_url: str) -> list[Dict[str, str]]
 
 async def poll_export_status(connection, status_url: str) -> Dict[str, Any]:
     """
-    GET the export ``status_url``. 202 (or an in-progress Task) is
+    GET the export ``status_url``. 202 (or an in-progress Task, or a timed-out poll) is
     ``{"state": "pending", "retry_after"}``; 200 is ``{"state": "complete",
     "files": [{"type", "url"}]}``, parsed from the manifest or Task output.
     """
@@ -664,7 +671,7 @@ async def poll_export_status(connection, status_url: str) -> Dict[str, Any]:
 
     try:
         _log_fhir_request(connection, "GET", status_url)
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=_FHIR_TIMEOUT) as client:
             response = await client.get(status_url, headers=_fhir_headers(connection))
         _log_response(response, "FHIR")
 
@@ -686,9 +693,13 @@ async def poll_export_status(connection, status_url: str) -> Dict[str, Any]:
             "state": "complete",
             "files": _output_files(data, status_url),
         }
+    except httpx.TimeoutException as e:
+        # The export may well still be running; the caller polls again.
+        logger.warning(f"Export status poll timed out ({_exception_message(e)}); will retry")
+        return {"success": True, "state": "pending", "retry_after": ""}
     except Exception as e:
-        logger.error(f"Error polling export status: {e}")
-        return {"success": False, "error": str(e)}
+        logger.error(f"Error polling export status: {_exception_message(e)}")
+        return {"success": False, "error": _exception_message(e)}
 
 
 async def download_export_file(
@@ -706,7 +717,7 @@ async def download_export_file(
         path = dest_dir / name
         _log_fhir_request(connection, "GET", url)
         headers = {**_fhir_headers(connection), "Accept": "application/fhir+ndjson"}
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=_FHIR_TIMEOUT) as client:
             async with client.stream("GET", url, headers=headers) as response:
                 if response.status_code != 200:
                     await response.aread()
@@ -719,5 +730,5 @@ async def download_export_file(
                         size += len(chunk)
         return {"success": True, "path": str(path), "bytes": size}
     except Exception as e:
-        logger.error(f"Error downloading export file: {e}")
-        return {"success": False, "error": str(e)}
+        logger.error(f"Error downloading export file: {_exception_message(e)}")
+        return {"success": False, "error": _exception_message(e)}
