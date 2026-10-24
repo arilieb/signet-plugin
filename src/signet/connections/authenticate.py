@@ -8,11 +8,15 @@ client_credentials with an ACDC client assertion) and stores the returned
 bearer token on the connection. Modeled on dcr_gate.
 """
 
+import asyncio
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
 import qasync
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from acdc_auth_client.core import flows
+from acdc_auth_client.core.options import ConnectionInfo
+from acdc_auth_client.models.errors import ACDCOAuthError
 from keri import help
 from keri.help import helping
 
@@ -23,7 +27,7 @@ from locksmith.ui.toolkit.widgets import (
     LocksmithInvertedButton,
 )
 
-from ..core import configing, presenting, remoting
+from ..core import configing, mock_data, presenting
 from .status import format_expiry
 
 logger = help.ogler.getLogger(__name__)
@@ -31,9 +35,34 @@ logger = help.ogler.getLogger(__name__)
 _PROMPT = "Authenticate with this server using your registered credential?"
 
 
-async def authenticate_connection(vault, db, connection_id: str) -> dict:
+def _mock_token() -> flows.AuthResult:
+    """The canned token of mock mode, as the library would return it."""
+    token = mock_data.mock_request_access_token("")
+    now = datetime.now(timezone.utc)
+    return flows.AuthResult(
+        access_token=token["access_token"],
+        token_type=token["token_type"],
+        token_scope=token["scope"],
+        token_expires_at=(now + timedelta(seconds=token["expires_in"])).isoformat(),
+        last_authenticated_at=helping.nowIso8601(),
+    )
+
+
+def _obtain_token(vault, info: ConnectionInfo) -> flows.AuthResult:
+    """A fresh token for the connection (the canned one in mock mode)."""
+    if configing.is_mock_mode():
+        return _mock_token()
+    return flows.authenticate(
+        info, vault.hby, vault.rgy.reger, configing.client_options()
+    )
+
+
+def authenticate_sync(vault, db, connection_id: str, force: bool = True) -> dict:
     """
-    Obtain and store an access token for a registered connection (no UI).
+    Obtain and store an access token for a registered connection (no UI, blocking).
+
+    Reuses a still-valid stored token unless ``force``. Runs the library's network
+    calls, so call it from a thread (``authenticate_connection`` / ``ensure_authenticated``).
 
     Returns ``{"success": True, "token_expires_at": iso}`` or
     ``{"success": False, "error": str}``.
@@ -41,6 +70,9 @@ async def authenticate_connection(vault, db, connection_id: str) -> dict:
     connection = db.signet_connections.get(keys=(connection_id,))
     if connection is None:
         return {"success": False, "error": "Connection not found."}
+    if not force and connection.has_valid_token():
+        logger.info(f"Connection {connection_id}: reusing valid access token")
+        return {"success": True, "token_expires_at": connection.token_expires_at}
     if connection.status != "registered":
         return {"success": False, "error": "The connection is not registered."}
 
@@ -53,60 +85,47 @@ async def authenticate_connection(vault, db, connection_id: str) -> dict:
             "error": "No client registration found for this identifier and "
             "credential. Register again.",
         }
-
-    discovery = await remoting.discover_server(connection.base_url)
-    if not discovery.get("success"):
-        return {
-            "success": False,
-            "error": discovery.get("error", "Server discovery failed."),
-        }
-    token_endpoint = discovery.get("token_endpoint")
-    if not token_endpoint:
-        return {
-            "success": False,
-            "error": "Server does not advertise a token endpoint.",
-        }
+    info = presenting.connection_info(connection)
+    info.client_id = client_id
 
     try:
-        assertion = (
-            ""
-            if configing.is_mock_mode()
-            else presenting.build_token_assertion(vault, connection)
-        )
-    except presenting.PresentingError as exc:
-        return {"success": False, "error": str(exc)}
+        result = _obtain_token(vault, info)
+    except ACDCOAuthError as exc:
+        return {"success": False, "error": exc.message or "Authentication failed."}
 
-    scope = connection.scopes if configing.is_json_format() else ""
-    result = await remoting.request_access_token(
-        token_endpoint, client_id, assertion, scope
-    )
-    if not result.get("success"):
-        return {
-            "success": False,
-            "error": result.get("error", "Authentication failed."),
-        }
-
-    # Computed once at receipt; never recomputed on read.
-    now = datetime.now(timezone.utc)
-    expires_in = int(result.get("expires_in") or 0)
-    connection.access_token = result["access_token"]
-    connection.token_type = result.get("token_type", "Bearer")
-    connection.token_scope = result.get("scope", "")
-    connection.token_expires_at = (now + timedelta(seconds=expires_in)).isoformat()
-    connection.last_authenticated_at = helping.nowIso8601()
+    # The expiry was computed once at receipt; never recomputed on read.
+    result.apply_to(connection)
     db.signet_connections.pin(keys=(connection_id,), val=connection)
-
     logger.info(f"Connection {connection_id} authenticated")
     return {"success": True, "token_expires_at": connection.token_expires_at}
 
 
+def authorized_connection(
+    vault, db, connection_id: str, force: bool = False
+) -> ConnectionInfo:
+    """
+    Authenticate (reusing a still-valid token unless ``force``) and return the connection
+    re-read from the db as a ``ConnectionInfo``, so it carries the fresh access token.
+    Raises RuntimeError on failure. Blocking: the ``get_connection`` of
+    ``flows.call_with_reauth`` / ``flows.export_group``, which run in a thread.
+    """
+    result = authenticate_sync(vault, db, connection_id, force)
+    if not result.get("success"):
+        raise RuntimeError(result.get("error", "Authentication failed."))
+    connection = db.signet_connections.get(keys=(connection_id,))
+    if connection is None:
+        raise RuntimeError("Connection not found.")
+    return presenting.connection_info(connection)
+
+
+async def authenticate_connection(vault, db, connection_id: str) -> dict:
+    """Obtain and store a fresh access token for a registered connection (no UI)."""
+    return await asyncio.to_thread(authenticate_sync, vault, db, connection_id, True)
+
+
 async def ensure_authenticated(vault, db, connection_id: str) -> dict:
     """Reuse a still-valid stored token, else authenticate; same return shape."""
-    connection = db.signet_connections.get(keys=(connection_id,))
-    if connection is not None and connection.has_valid_token():
-        logger.info(f"Connection {connection_id}: reusing valid access token")
-        return {"success": True, "token_expires_at": connection.token_expires_at}
-    return await authenticate_connection(vault, db, connection_id)
+    return await asyncio.to_thread(authenticate_sync, vault, db, connection_id, False)
 
 
 class AuthenticateDialog(LocksmithDialog):

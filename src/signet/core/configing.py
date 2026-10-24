@@ -5,11 +5,15 @@ signet.core.configing module
 Environment-driven configuration for the signet plugin: the mock-mode gate
 (real remoting calls short-circuit to canned mock_data responses in the
 DEVELOPMENT environment unless SIGNET_LIVE=1), the partner discovery URL, and
-the onboarding format (single CESR grant, or a JSON submission packet).
+the onboarding format (single CESR grant, or a JSON submission packet). Every
+partner-specific ``SIGNET_*`` override is read here and handed to the
+acdc-auth-client library as a ``ClientOptions`` (``client_options``).
 """
 
 import os
 
+from acdc_auth_client.constants import DEFAULT_ONBOARDING_SCOPES, LESR_SCHEMA_SAID
+from acdc_auth_client.core.options import ClientOptions
 from locksmith.core.configing import Environments, LocksmithConfig
 
 # Placeholder base URL used by seed/mock data only; real per-connection
@@ -19,21 +23,12 @@ DEFAULT_ONYX_BASE_URL = "https://onyx.example.com"
 
 DEFAULT_LOCAL_PARTNER_URL = "http://127.0.0.1:8000"
 
-# Discovery document path of KERI-aware partners; a partner URL may be the full URL of it.
-KERI_WELL_KNOWN = "/.well-known/keri"
-
 ONBOARDING_FORMAT_CESR = "cesr"
 ONBOARDING_FORMAT_JSON = "json"
 
-# Scopes requested at onboarding unless SIGNET_ONBOARDING_SCOPES says otherwise.
-DEFAULT_ONBOARDING_SCOPES = ("system/Group.read",)
-
-# Engagement Context Role (ECR) credential schema SAID.
-ECR_SCHEMA_SAID = "EEy9PkikFcANV1l7EHukCeXqrzT1hNZjGlUk7wuMO5jw"
-
-# Legal Entity Service Representative (LESR) credential schema SAID; the default
-# submitter credential (keep in sync with SCHEMA_LESR in scripts/dev-live/env.sh).
-LESR_SCHEMA_SAID = "EHfJ563sbivepFRzk506fJenWIeVG2uXdAes8iJhHJan"
+# The credential schema SAIDs (keep LESR_SCHEMA_SAID in sync with SCHEMA_LESR in
+# scripts/dev-live/env.sh) and the default onboarding scopes live in
+# acdc_auth_client.constants.
 
 
 def _is_development() -> bool:
@@ -58,11 +53,6 @@ def partner_url() -> str:
 def is_partner_url_set() -> bool:
     """True when SIGNET_PARTNER_URL is explicitly set (``partner_url`` always has a default)."""
     return bool(os.environ.get("SIGNET_PARTNER_URL", "").strip())
-
-
-def is_keri_discovery_url(url: str) -> bool:
-    """True when ``url`` is the full URL of a partner's ``.well-known/keri`` document."""
-    return url.split("?", 1)[0].rstrip("/").endswith(KERI_WELL_KNOWN)
 
 
 def onboarding_format() -> str:
@@ -163,3 +153,27 @@ def accepted_credential_schemas() -> tuple[str, ...]:
     raw = os.environ.get("SIGNET_CREDENTIAL_SCHEMAS", "")
     saids = tuple(said.strip() for said in raw.split(",") if said.strip())
     return saids or (LESR_SCHEMA_SAID,)
+
+
+def client_options() -> ClientOptions:
+    """The ``SIGNET_*`` environment as ``ClientOptions`` for the acdc-auth-client library.
+
+    Unknown ``SIGNET_ONBOARDING_FORMAT`` / ``SIGNET_EXPORT_METHOD`` values fall back to
+    ``cesr`` / ``POST`` here; the library rejects them.
+    """
+    return ClientOptions(
+        dialect=onboarding_format(),
+        onboarding_endpoint=onboarding_endpoint_override(),
+        registration_endpoint=registration_endpoint_override(),
+        token_endpoint=token_endpoint_override(),
+        server_aid=onboarding_server_aid(),
+        fhir_base_url=fhir_base_url_override(),
+        export_method=export_method(),
+        export_status_url_prefix=export_status_url_prefix(),
+        onboarding_scopes=tuple(onboarding_scopes()),
+        omit_ipex_grant=omit_ipex_grant(),
+        onboarding_oobis=tuple(onboarding_oobi_override()),
+        dcr_oobi=dcr_oobi_override(),
+        assume_palantir_oobis=assume_palantir_oobis(),
+        registrar_url=registrar_url(),
+    )

@@ -107,7 +107,7 @@ class DynamicClientRegistrationGateDialog(LocksmithDialog):
                 self._reset_buttons()
                 return
             options = {}
-            if configing.is_json_format() and not configing.is_mock_mode():
+            if configing.client_options().is_json and not configing.is_mock_mode():
                 discovery = await remoting.discover_server(connection.base_url)
                 if not discovery.get("success"):
                     self.show_error(discovery.get("error", "Server discovery failed."))

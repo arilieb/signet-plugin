@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any, Dict
 from urllib.parse import urlparse
 
+from acdc_auth_client.utils.http import is_keri_discovery_url
+
 from ..db.basing import SignetConnection
 from . import configing
 
@@ -82,7 +84,7 @@ _POLLED_ONCE: set = set()
 
 def mock_discover_server(base_url: str) -> Dict[str, Any]:
     """Canned /.well-known/udap (or full .well-known/keri URL) onboarding discovery."""
-    if configing.is_keri_discovery_url(base_url):
+    if is_keri_discovery_url(base_url):
         origin = base_url.split("/.well-known/", 1)[0]
         return {
             "success": True,

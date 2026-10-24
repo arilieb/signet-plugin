@@ -9,21 +9,24 @@ token); only on success does the (future) downstream action run.
 """
 
 import asyncio
-import time
+import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import qasync
 from PySide6.QtWidgets import QFileDialog, QLabel, QVBoxLayout, QWidget
+from acdc_auth_client.core import flows
+from acdc_auth_client.core.options import ConnectionInfo
+from acdc_auth_client.models.errors import ACDCOAuthError
 from keri import help
 
 from locksmith.ui import colors
 from locksmith.ui.toolkit.tables import PaginatedTableWidget
 from locksmith.ui.toolkit.widgets.fields import FloatingLabelComboBox
 from locksmith.ui.toolkit.widgets.page import LocksmithFormPage, guarded
-from signet.core import remoting
-
-from ..connections.authenticate import authenticate_connection, ensure_authenticated
+from ..connections.authenticate import authorized_connection, ensure_authenticated
+from ..core import remoting
 
 logger = help.ogler.getLogger(__name__)
 
@@ -31,19 +34,9 @@ _API_ICON = ":/assets/material-icons/api.svg"
 _INTRO_TEXT = "To get started with PDex Member Match, select a connection from the dropdown below."
 _EXPORT_COLUMNS = ["File", "Type", "Size", "Status"]
 _LOADING_STATE_HEIGHT = 240
-_DEFAULT_POLL_SECONDS = 5.0
-_MAX_POLL_SECONDS = 120.0
-_INITIAL_POLL_SECONDS = 1.0
-_BACKOFF_FACTOR = 2.0
-_MAX_EXPORT_SECONDS = 600.0
 _NO_CONNECTIONS_TEXT = (
     "No active connections available. Register a connection on the Connections page."
 )
-
-
-def _poll_delay(attempt: int, ceiling: float) -> float:
-    """Exponential backoff from the initial delay, capped at the server's Retry-After."""
-    return min(_INITIAL_POLL_SECONDS * _BACKOFF_FACTOR**attempt, ceiling)
 
 
 class FhirApisListPage(LocksmithFormPage):
@@ -56,6 +49,7 @@ class FhirApisListPage(LocksmithFormPage):
         self._connection_by_id: dict[str, Any] = {}
         self._group_by_id: dict[str, dict] = {}
         self._export_run = 0  # bumped per export so a superseded poll loop stops
+        self._export_stop = threading.Event()  # wakes a superseded export's wait
         self._export_group_id = ""
         self._export_rows: dict[str, dict] = {}  # File column -> row incl. url
 
@@ -188,44 +182,46 @@ class FhirApisListPage(LocksmithFormPage):
         finally:
             self._connection_selector.blockSignals(False)
 
-    async def _authorized_connection(self, connection_id: str, force: bool = False):
+    def _connection_getter(
+        self, connection_id: str
+    ) -> Callable[[bool], ConnectionInfo]:
         """
-        Authenticate (reusing a still-valid token unless ``force``) and return the connection
-        re-read from the db, so it carries the fresh access token. Raises RuntimeError on failure.
+        The ``get_connection`` of ``flows.call_with_reauth`` for ``connection_id``: a
+        connection carrying a usable token (a still-valid stored one, or a fresh one when
+        ``force``), re-read from the db. Blocking, so the flows run it in their thread.
         """
         db = self._get_db()
-        if db is None:
-            raise RuntimeError("No signet database available.")
-        authenticate = authenticate_connection if force else ensure_authenticated
-        result = await authenticate(self.app.vault, db, connection_id)
-        if not result.get("success"):
-            raise RuntimeError(result.get("error", "Authentication failed."))
-        connection = db.signet_connections.get(keys=(connection_id,))
-        if connection is None:
-            raise RuntimeError("Connection not found.")
-        return connection
+        vault = self.app.vault if self.app else None
 
-    async def _call_authorized(self, connection_id: str, call) -> dict[str, Any]:
+        def get_connection(force: bool = False) -> ConnectionInfo:
+            if db is None or vault is None:
+                raise RuntimeError("No signet database available.")
+            return authorized_connection(vault, db, connection_id, force)
+
+        return get_connection
+
+    async def _authorized_connection(self, connection_id: str) -> ConnectionInfo:
         """
-        ``await call(connection)`` with an authorized connection. A 401/403 may be a token the
-        server no longer accepts although it has not expired, so re-authenticate once for a
-        fresh token and retry.
+        Authenticate (reusing a still-valid token) and return the connection re-read from
+        the db, so it carries the fresh access token. Raises RuntimeError on failure.
         """
-        connection = await self._authorized_connection(connection_id)
-        result = await call(connection)
-        if result.get("status_code") in (401, 403):
-            logger.warning(
-                f"FHIR server answered {result['status_code']}; "
-                "re-authenticating for a fresh token and retrying once"
-            )
-            connection = await self._authorized_connection(connection_id, force=True)
-            result = await call(connection)
-        return result
+        return await asyncio.to_thread(self._connection_getter(connection_id), False)
+
+    async def _call_authorized(self, connection_id: str, call: Callable) -> Any:
+        """
+        ``call(connection)`` in a thread with an authorized connection. A 401/403 may be a
+        token the server no longer accepts although it has not expired, so
+        ``flows.call_with_reauth`` re-authenticates once for a fresh token and retries.
+        A failed call raises a library error (``ACDCOAuthError``).
+        """
+        return await asyncio.to_thread(
+            flows.call_with_reauth, self._connection_getter(connection_id), call
+        )
 
     @qasync.asyncSlot(int)
     async def _on_connection_changed(self, index: int):
         """Handle connection selection change."""
-        self._export_run += 1  # abandon any export in flight
+        self._supersede_export()  # abandon any export in flight
         self.clear_error()
         connection_id = self._connection_selector.currentData()
         self.table.hide()
@@ -262,7 +258,7 @@ class FhirApisListPage(LocksmithFormPage):
                 self._scope_label.setText(f"Granted scope: {connection.token_scope}")
                 self._scope_label.show()
 
-            response = await remoting.get_groups(connection)
+            response = await remoting.get_groups(connection_id)
             if not response.get("success"):
                 message = response.get("error", "Failed to load Group IDs.")
                 logger.error(f"FHIR Groups: {message}")
@@ -284,8 +280,7 @@ class FhirApisListPage(LocksmithFormPage):
     @qasync.asyncSlot(int)
     async def _on_group_changed(self, index: int):
         """Handle group selection change: start a data export and follow it to completion."""
-        self._export_run += 1
-        run = self._export_run
+        run = self._supersede_export()
         self.clear_error()
         group_id = self._group_selector.currentData()
         connection_id = self._connection_selector.currentData()
@@ -310,54 +305,43 @@ class FhirApisListPage(LocksmithFormPage):
         self.table.set_static_data(rows, keep_view=keep_view)
         self.table.show()
 
+    def _supersede_export(self) -> int:
+        """Abandon the export in flight (waking it if it waits); the id of the next one."""
+        self._export_run += 1
+        self._export_stop.set()
+        self._export_stop = threading.Event()
+        return self._export_run
+
     async def _run_export(self, run: int, connection_id: str, group_id: str):
         self._export_group_id = group_id
         self._export_rows = {}
         self._show_loading()
 
-        kickoff = await self._call_authorized(
-            connection_id,
-            lambda connection: remoting.davinci_data_export(connection, group_id),
+        stop = self._export_stop  # set when a newer export supersedes this one
+        fhir = remoting.fhir_client()
+        events = flows.export_group(
+            self._connection_getter(connection_id),
+            fhir,
+            group_id,
+            sleep=stop.wait,
+            cancelled=lambda: run != self._export_run,
         )
-        if run != self._export_run:
-            return
-        if not kickoff.get("success"):
-            self.table.hide()
-            self.show_error(kickoff.get("error", "Data export failed."))
-            return
-
-        status_url = kickoff["status_url"]
-        ceiling = _DEFAULT_POLL_SECONDS  # Retry-After: the backoff's upper bound
-        deadline = time.monotonic() + _MAX_EXPORT_SECONDS
-        attempt = 0
-        while time.monotonic() < deadline:
-            # Re-authenticates if the token expired while waiting
-            status = await self._call_authorized(
-                connection_id,
-                lambda connection: remoting.poll_export_status(connection, status_url),
-            )
-            if run != self._export_run:
-                return
-            if not status.get("success"):
+        try:
+            # Each step blocks (a request, or the wait between polls): run it in a thread.
+            while event := await asyncio.to_thread(next, events, None):
+                if run != self._export_run:
+                    return
+                if event.kind == flows.EVENT_COMPLETE:
+                    self._show_export_files([file.to_dict() for file in event.files])
+                    return
+                if event.kind == flows.EVENT_CANCELLED:
+                    return
+        except ACDCOAuthError as exc:  # also the "taking too long" timeout
+            if run == self._export_run:
                 self.table.hide()
-                self.show_error(status.get("error", "Data export failed."))
-                return
-            if status["state"] == "complete":
-                self._show_export_files(status.get("files", []))
-                return
-            try:
-                # No Retry-After (e.g. a timed-out poll) keeps the previous ceiling
-                ceiling = float(status.get("retry_after") or ceiling)
-            except ValueError:
-                ceiling = _DEFAULT_POLL_SECONDS
-            ceiling = min(max(ceiling, 1.0), _MAX_POLL_SECONDS)
-            await asyncio.sleep(_poll_delay(attempt, ceiling))
-            attempt += 1
-            if run != self._export_run:
-                return
-
-        self.table.hide()
-        self.show_error("Data export is taking too long; try again later.")
+                self.show_error(exc.message or "Data export failed.")
+        finally:
+            await asyncio.to_thread(fhir.close)
 
     def _show_export_files(self, files: list[dict[str, str]]):
         """One row per exported file; clicking a row downloads it."""
@@ -433,18 +417,22 @@ class FhirApisListPage(LocksmithFormPage):
 
         row["Status"] = "Downloading"
         self._refresh_export_rows()
-        result = await self._call_authorized(
-            connection_id,
-            lambda connection: remoting.download_export_file(
-                connection, row["url"], destination.parent, filename=destination.name
-            ),
-        )
-        if not result.get("success"):
+        fhir = remoting.fhir_client()
+        try:
+            downloaded = await self._call_authorized(
+                connection_id,
+                lambda connection: fhir.download_file(
+                    connection, row["url"], destination.parent, destination.name
+                ),
+            )
+        except ACDCOAuthError as exc:
             row["Status"] = "Failed"
             self._refresh_export_rows()
-            self.show_error(result.get("error", "Download failed."))
+            self.show_error(exc.message or "Download failed.")
             return
-        row["Size"] = f"{result['bytes']:,} B"
+        finally:
+            await asyncio.to_thread(fhir.close)
+        row["Size"] = f"{downloaded.bytes:,} B"
         row["Status"] = "Downloaded"
         self._refresh_export_rows()
-        logger.info(f"Downloaded {row['File']} to {result['path']}")
+        logger.info(f"Downloaded {row['File']} to {downloaded.path}")

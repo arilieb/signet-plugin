@@ -55,7 +55,7 @@ def _live(monkeypatch):
 def _fixtures():
     return [
         _cred(
-            "Eecr", configing.ECR_SCHEMA_SAID, "ECR", engagementContextRole="Engineer"
+            "Eecr", credentials.ECR_SCHEMA_SAID, "ECR", engagementContextRole="Engineer"
         ),
         _cred("Esub", SUBUNIT_SAID, "LE Subunit"),
         _cred("Elesr", LESR_SAID, "LESR", policyDomainRole="Clinician"),
@@ -91,7 +91,7 @@ def test_blank_env_falls_back_to_lesr(monkeypatch):
 
 def test_env_set_picks_ecr(monkeypatch):
     _live(monkeypatch)
-    monkeypatch.setenv("SIGNET_CREDENTIAL_SCHEMAS", configing.ECR_SCHEMA_SAID)
+    monkeypatch.setenv("SIGNET_CREDENTIAL_SCHEMAS", credentials.ECR_SCHEMA_SAID)
     (found,) = credentials.filter_credentials(_vault(_fixtures()))
     assert found["said"] == "Eecr"
 
@@ -99,7 +99,7 @@ def test_env_set_picks_ecr(monkeypatch):
 def test_multiple_schemas(monkeypatch):
     _live(monkeypatch)
     monkeypatch.setenv(
-        "SIGNET_CREDENTIAL_SCHEMAS", f"{configing.ECR_SCHEMA_SAID}, {LESR_SAID}"
+        "SIGNET_CREDENTIAL_SCHEMAS", f"{credentials.ECR_SCHEMA_SAID}, {LESR_SAID}"
     )
     assert [c["said"] for c in credentials.filter_credentials(_vault(_fixtures()))] == [
         "Eecr",
@@ -111,4 +111,4 @@ def test_mock_mode_seeds_placeholder(monkeypatch):
     monkeypatch.setattr(configing, "is_mock_mode", lambda: True)
     monkeypatch.setattr(credentials, "is_mock_mode", lambda: True)
     (found,) = credentials.filter_credentials(None)
-    assert found["schema_said"] == configing.ECR_SCHEMA_SAID
+    assert found["schema_said"] == credentials.ECR_SCHEMA_SAID

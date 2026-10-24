@@ -76,11 +76,91 @@ def test_onboarding_server_aid(monkeypatch):
     assert configing.onboarding_server_aid() == "Esrv"
 
 
-def test_is_keri_discovery_url():
-    assert configing.is_keri_discovery_url("https://h/slapv3/pdexv2/.well-known/keri")
-    assert configing.is_keri_discovery_url("https://h/.well-known/keri/")
-    assert not configing.is_keri_discovery_url("https://h/slapv3")
-    assert not configing.is_keri_discovery_url("https://h/.well-known/udap")
+_OPTION_VARS = (
+    "SIGNET_ONBOARDING_FORMAT",
+    "SIGNET_ONBOARDING_ENDPOINT",
+    "SIGNET_REGISTRATION_ENDPOINT",
+    "SIGNET_TOKEN_ENDPOINT",
+    "SIGNET_ONBOARDING_SERVER_AID",
+    "SIGNET_FHIR_BASE_URL",
+    "SIGNET_EXPORT_METHOD",
+    "SIGNET_EXPORT_STATUS_URL_PREFIX",
+    "SIGNET_ONBOARDING_SCOPES",
+    "SIGNET_ONBOARDING_OMIT_GRANT",
+    "SIGNET_ONBOARDING_OOBI",
+    "SIGNET_DCR_OOBI",
+    "SIGNET_ASSUME_PALANTIR_OOBIS",
+    "SIGNET_REGISTRAR_URL",
+)
+
+
+def test_client_options_defaults(monkeypatch):
+    for var in _OPTION_VARS:
+        monkeypatch.delenv(var, raising=False)
+    options = configing.client_options()
+    assert options.dialect == "cesr" and not options.is_json
+    assert options.export_method == "POST"
+    assert options.onboarding_scopes == ("system/Group.read",)
+    assert options.onboarding_oobis == ()
+    assert not options.omit_ipex_grant and not options.assume_palantir_oobis
+    assert (
+        options.onboarding_endpoint,
+        options.registration_endpoint,
+        options.token_endpoint,
+        options.server_aid,
+        options.fhir_base_url,
+        options.export_status_url_prefix,
+        options.dcr_oobi,
+        options.registrar_url,
+    ) == ("",) * 8
+
+
+def test_client_options_reads_every_env_var(monkeypatch):
+    env = {
+        "SIGNET_ONBOARDING_FORMAT": "JSON",
+        "SIGNET_ONBOARDING_ENDPOINT": " http://o/udap/onboarding ",
+        "SIGNET_REGISTRATION_ENDPOINT": "http://o/register",
+        "SIGNET_TOKEN_ENDPOINT": "http://o/token",
+        "SIGNET_ONBOARDING_SERVER_AID": "Esrv",
+        "SIGNET_FHIR_BASE_URL": "http://o/fhir/",
+        "SIGNET_EXPORT_METHOD": "get",
+        "SIGNET_EXPORT_STATUS_URL_PREFIX": "http://o/status",
+        "SIGNET_ONBOARDING_SCOPES": "system/Group.read system/*.read",
+        "SIGNET_ONBOARDING_OMIT_GRANT": "1",
+        "SIGNET_ONBOARDING_OOBI": "http://w/oobi/a, http://w/oobi/b",
+        "SIGNET_DCR_OOBI": "http://w/oobi/c",
+        "SIGNET_ASSUME_PALANTIR_OOBIS": "true",
+        "SIGNET_REGISTRAR_URL": "http://reg/",
+    }
+    for var, value in env.items():
+        monkeypatch.setenv(var, value)
+    options = configing.client_options()
+    assert options.to_dict() == {
+        "dialect": "json",
+        "onboarding_endpoint": "http://o/udap/onboarding",
+        "registration_endpoint": "http://o/register",
+        "token_endpoint": "http://o/token",
+        "server_aid": "Esrv",
+        "fhir_base_url": "http://o/fhir",
+        "export_method": "GET",
+        "export_status_url_prefix": "http://o/status/",
+        "onboarding_scopes": ["system/Group.read", "system/*.read"],
+        "omit_ipex_grant": True,
+        "onboarding_oobis": ["http://w/oobi/a", "http://w/oobi/b"],
+        "dcr_oobi": "http://w/oobi/c",
+        "assume_palantir_oobis": True,
+        "registrar_url": "http://reg",
+        "timeout": options.timeout,
+        "fhir_timeout": options.fhir_timeout,
+    }
+
+
+def test_client_options_unknown_values_fall_back(monkeypatch):
+    # The library rejects an unknown dialect / export method; the env reader does not.
+    monkeypatch.setenv("SIGNET_ONBOARDING_FORMAT", "xml")
+    monkeypatch.setenv("SIGNET_EXPORT_METHOD", "PUT")
+    options = configing.client_options()
+    assert options.dialect == "cesr" and options.export_method == "POST"
 
 
 def test_partner_url_set_detection(monkeypatch):

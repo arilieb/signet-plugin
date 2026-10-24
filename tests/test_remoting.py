@@ -1,597 +1,269 @@
-import json
+"""
+The remoting facade: the library's calls as the {"success", ...} dicts the UI reads,
+with the mock gate in front. The wire behaviour (statuses, headers, overrides) is
+covered by acdc-auth-client's own tests; these pin the facade's contract.
+"""
 
-import httpx
 import pytest
+import responses
 
-from urllib.parse import parse_qsl
+from signet.core import mock_data, remoting
 
-from signet.core import presenting, remoting
+SERVER = "http://s"
 
 
 @pytest.fixture(autouse=True)
 def real_mode(monkeypatch):
     monkeypatch.setattr(remoting, "is_mock_mode", lambda: False)
+    for var in (
+        "SIGNET_ONBOARDING_FORMAT",
+        "SIGNET_ONBOARDING_ENDPOINT",
+        "SIGNET_ONBOARDING_SERVER_AID",
+        "SIGNET_REGISTRATION_ENDPOINT",
+        "SIGNET_TOKEN_ENDPOINT",
+    ):
+        monkeypatch.delenv(var, raising=False)
 
 
-def _patch(monkeypatch, handler):
-    transport = httpx.MockTransport(handler)
-    real = httpx.AsyncClient
-
-    def factory(*a, **kw):
-        kw["transport"] = transport
-        return real(*a, **kw)
-
-    monkeypatch.setattr(remoting.httpx, "AsyncClient", factory)
+@pytest.fixture
+def http():
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as mock:
+        yield mock
 
 
-async def test_submit_pending(monkeypatch):
-    seen = []
-
-    def handler(request):
-        seen.append(request)
-        return httpx.Response(
-            202,
-            json={
-                "onboarding_id": "ob1",
-                "correlation_id": "c1",
-                "status": "in-review",
-                "purposes": [{"purpose": "TREAT", "status": "in-review"}],
-            },
-            headers={"Content-Location": "/udap/onboarding/ob1", "Retry-After": "30"},
-        )
-
-    _patch(monkeypatch, handler)
-    r = await remoting.submit_onboarding(
-        "http://s", "http://s/udap/onboarding", b"CESRBYTES"
+async def test_submit_pending(http):
+    http.post(
+        f"{SERVER}/udap/onboarding",
+        status=202,
+        json={
+            "onboarding_id": "ob1",
+            "correlation_id": "c1",
+            "status": "in-review",
+            "purposes": [{"purpose": "TREAT", "status": "in-review"}],
+        },
+        headers={"Content-Location": "/udap/onboarding/ob1", "Retry-After": "30"},
     )
-    assert seen[0].headers["content-type"] == "application/cesr"
-    assert seen[0].content == b"CESRBYTES"
-    assert "signify-resource" not in seen[0].headers
+    r = await remoting.submit_onboarding(
+        SERVER, f"{SERVER}/udap/onboarding", b"CESRBYTES"
+    )
+    request = http.calls[0].request
+    assert request.headers["Content-Type"] == "application/cesr"
+    assert request.body == b"CESRBYTES"
     assert r["success"] and not r["terminal"]
     assert r["onboarding_id"] == "ob1"
-    assert r["poll_url"] == "http://s/udap/onboarding/ob1"
+    assert r["correlation_id"] == "c1"
+    assert r["status"] == "in-review"
+    assert r["poll_url"] == f"{SERVER}/udap/onboarding/ob1"
     assert r["retry_after"] == "30"
     assert r["purpose_status"] == "in-review"
+    assert r["data"]["onboarding_id"] == "ob1"
 
 
-async def test_submit_terminal_approved(monkeypatch):
-    _patch(
-        monkeypatch,
-        lambda req: httpx.Response(
-            200,
-            json={
-                "onboarding_id": "ob1",
-                "status": "approved",
-                "decision_provenance": {"method": "whitelist"},
-            },
-        ),
+async def test_submit_json_packet_content_type(http):
+    http.post(f"{SERVER}/x", status=200, json={"onboarding_id": "ob1"})
+    await remoting.submit_onboarding(
+        SERVER, f"{SERVER}/x", b"{}", content_type="application/json"
     )
-    r = await remoting.submit_onboarding("http://s", "http://s/x", b"{}")
+    assert http.calls[0].request.headers["Content-Type"] == "application/json"
+
+
+async def test_submit_terminal_approved(http):
+    http.post(
+        f"{SERVER}/x",
+        status=200,
+        json={
+            "onboarding_id": "ob1",
+            "status": "approved",
+            "decision_provenance": {"method": "whitelist"},
+        },
+    )
+    r = await remoting.submit_onboarding(SERVER, f"{SERVER}/x", b"{}")
     assert r["terminal"] and r["status"] == "approved"
     assert r["decision_provenance"] == {"method": "whitelist"}
 
 
 @pytest.mark.parametrize("code", [400, 401, 403, 503])
-async def test_submit_error_keeps_correlation_id(monkeypatch, code):
-    _patch(
-        monkeypatch,
-        lambda req: httpx.Response(
-            code,
-            json={
-                "error": "invalid_client",
-                "error_description": "Signature is invalid",
-                "correlation_id": "abc123",
-            },
-        ),
+async def test_submit_error_keeps_status_and_correlation_id(http, code):
+    http.post(
+        f"{SERVER}/x",
+        status=code,
+        json={
+            "error": "invalid_client",
+            "error_description": "Signature is invalid",
+            "correlation_id": "abc123",
+        },
     )
-    r = await remoting.submit_onboarding("http://s", "http://s/x", b"{}")
+    r = await remoting.submit_onboarding(SERVER, f"{SERVER}/x", b"{}")
     assert not r["success"]
     assert r["status_code"] == code
+    assert r["correlation_id"] == "abc123"
     assert "Signature is invalid" in r["error"]
     assert "abc123" in r["error"]
 
 
-async def test_poll_uses_poll_url_and_statuses(monkeypatch):
-    seen = []
+async def test_transport_error_has_no_status_code(http):
+    # No response was received: the dict carries the message only.
+    http.post(f"{SERVER}/x", body=ConnectionError("refused"))
+    r = await remoting.submit_onboarding(SERVER, f"{SERVER}/x", b"{}")
+    assert r["success"] is False
+    assert "refused" in r["error"]
+    assert "status_code" not in r
 
-    def handler(request):
-        seen.append(str(request.url))
-        if len(seen) == 1:
-            return httpx.Response(
-                202, json={"onboarding_id": "ob1", "status": "in-review"}
-            )
-        return httpx.Response(200, json={"onboarding_id": "ob1", "status": "rejected"})
 
-    _patch(monkeypatch, handler)
-    first = await remoting.poll_onboarding("http://s", "ob1", "http://s/custom/ob1")
-    second = await remoting.poll_onboarding("http://s", "ob1")
-    assert seen == ["http://s/custom/ob1", "http://s/udap/onboarding/ob1"]
+async def test_unexpected_exception_becomes_a_failure(monkeypatch):
+    def boom(*args):
+        raise ValueError("kaput")
+
+    monkeypatch.setattr(remoting, "_invoke", boom)
+    r = await remoting.poll_onboarding(SERVER, "ob1")
+    assert r == {"success": False, "error": "ValueError: kaput"}
+
+
+async def test_poll_uses_poll_url_and_statuses(http):
+    http.get(
+        "http://s/custom/ob1",
+        status=202,
+        json={"onboarding_id": "ob1", "status": "in-review"},
+    )
+    http.get(
+        f"{SERVER}/udap/onboarding/ob1",
+        status=200,
+        json={"onboarding_id": "ob1", "status": "rejected"},
+    )
+    first = await remoting.poll_onboarding(SERVER, "ob1", "http://s/custom/ob1")
+    second = await remoting.poll_onboarding(SERVER, "ob1")
+    assert [call.request.url for call in http.calls] == [
+        "http://s/custom/ob1",
+        f"{SERVER}/udap/onboarding/ob1",
+    ]
     assert not first["terminal"]
     assert second["terminal"] and second["status"] == "rejected"
 
 
-async def test_discover_server(monkeypatch):
-    _patch(
-        monkeypatch,
-        lambda req: httpx.Response(
-            200, json={"onboarding_endpoint": "http://s/udap/onboarding", "aid": "Esrv"}
-        ),
+async def test_poll_rebases_keri_poll_url_from_the_env(http, monkeypatch):
+    monkeypatch.setenv("SIGNET_ONBOARDING_ENDPOINT", "http://right:9000/onboard")
+    http.get(
+        "http://right:9000/udap/onboarding/ob1",
+        status=200,
+        json={"onboarding_id": "ob1", "status": "approved"},
     )
-    r = await remoting.discover_server("http://s")
+    r = await remoting.poll_onboarding(
+        "http://wrong/.well-known/keri",
+        "ob1",
+        "http://wrong/udap/onboarding/ob1",
+    )
+    assert r["success"] and r["status"] == "approved"
+
+
+async def test_discover_server(http):
+    http.get(
+        f"{SERVER}/.well-known/udap",
+        json={"onboarding_endpoint": f"{SERVER}/udap/onboarding", "aid": "Esrv"},
+    )
+    r = await remoting.discover_server(SERVER)
     assert r == {
         "success": True,
-        "onboarding_endpoint": "http://s/udap/onboarding",
+        "onboarding_endpoint": f"{SERVER}/udap/onboarding",
         "aid": "Esrv",
         "registration_endpoint": "",
         "token_endpoint": "",
     }
 
 
-async def test_discover_server_legacy_mode(monkeypatch):
-    _patch(monkeypatch, lambda req: httpx.Response(200, json={"issuer": "x"}))
-    r = await remoting.discover_server("http://s")
+async def test_discover_server_without_onboarding_fails(http):
+    http.get(f"{SERVER}/.well-known/udap", json={"issuer": SERVER})
+    r = await remoting.discover_server(SERVER)
     assert not r["success"]
+    assert r["error"]
 
 
-async def test_register_created(monkeypatch):
-    def handler(request):
-        assert request.url.path == "/register"
-        assert json.loads(request.content)["udap"] == "1"
-        return httpx.Response(
-            201, json={"client_id": "ECRED", "scopes": ["read", "write"]}
-        )
-
-    _patch(monkeypatch, handler)
-    r = await remoting.register_dynamic_client("http://s", {"udap": "1"})
-    assert r["success"] and r["client_id"] == "ECRED"
-    assert r["scopes"] == "read write"
-
-
-@pytest.mark.parametrize(
-    "code,err",
-    [
-        (400, "invalid_redirect_uri"),
-        (403, "access_denied"),
-        (503, "temporarily_unavailable"),
-    ],
-)
-async def test_register_error_keeps_correlation_id(monkeypatch, code, err):
-    _patch(
-        monkeypatch,
-        lambda req: httpx.Response(
-            code, json={"error": err, "correlation_id": "abc123"}
-        ),
-    )
-    r = await remoting.register_dynamic_client("http://s", {})
-    assert not r["success"]
-    assert r["status_code"] == code
-    assert err in r["error"] and "abc123" in r["error"]
-    assert r["correlation_id"] == "abc123"
-
-
-async def test_register_mock_mode(monkeypatch):
-    monkeypatch.setattr(remoting, "is_mock_mode", lambda: True)
-    r = await remoting.register_dynamic_client("http://s", {})
-    assert r["success"] and r["client_id"]
-
-
-async def test_discover_server_returns_token_endpoint(monkeypatch):
-    _patch(
-        monkeypatch,
-        lambda req: httpx.Response(
-            200,
-            json={
-                "onboarding_endpoint": "http://s/udap/onboarding",
-                "aid": "Esrv",
-                "token_endpoint": "http://s/token",
-            },
-        ),
-    )
-    r = await remoting.discover_server("http://s")
-    assert r["success"] and r["token_endpoint"] == "http://s/token"
-
-
-async def test_discover_server_without_token_endpoint_still_succeeds(monkeypatch):
-    _patch(
-        monkeypatch,
-        lambda req: httpx.Response(
-            200, json={"onboarding_endpoint": "http://s/udap/onboarding", "aid": "Esrv"}
-        ),
-    )
-    r = await remoting.discover_server("http://s")
-    assert r["success"] and r["token_endpoint"] == ""
-
-
-async def test_request_access_token_form_and_success(monkeypatch):
-    seen = {}
-
-    def handler(request):
-        seen["url"] = str(request.url)
-        seen["ctype"] = request.headers["content-type"]
-        seen["form"] = dict(parse_qsl(request.content.decode()))
-        return httpx.Response(
-            200,
-            json={
-                "access_token": "tok",
-                "token_type": "Bearer",
-                "expires_in": 3600,
-                "scope": "read",
-            },
-        )
-
-    _patch(monkeypatch, handler)
-    r = await remoting.request_access_token("http://s/token", "srv-123", "CESRMSG")
-    assert seen["url"] == "http://s/token"
-    assert seen["ctype"] == "application/x-www-form-urlencoded"
-    assert seen["form"] == {
-        "grant_type": "client_credentials",
-        "client_id": "srv-123",  # the issued id, not the credential SAID
-        "client_assertion_type": presenting.ASSERTION_TYPE,
-        "client_assertion": "CESRMSG",
-    }
-    assert r["success"] and r["access_token"] == "tok"
-    assert r["token_type"] == "Bearer" and r["expires_in"] == 3600
-    assert r["scope"] == "read"
-
-
-async def test_request_access_token_sends_scope_when_given(monkeypatch):
-    seen = {}
-
-    def handler(request):
-        seen["form"] = dict(parse_qsl(request.content.decode()))
-        return httpx.Response(200, json={"access_token": "tok"})
-
-    _patch(monkeypatch, handler)
-    await remoting.request_access_token("http://s/token", "c", "a", scope="read")
-    assert seen["form"]["scope"] == "read"
-
-
-@pytest.mark.parametrize(
-    "code,err",
-    [(401, "invalid_client"), (400, "unauthorized_client")],
-)
-async def test_request_access_token_errors(monkeypatch, code, err):
-    _patch(
-        monkeypatch,
-        lambda req: httpx.Response(
-            code, json={"error": err, "error_description": f"bad: {err}"}
-        ),
-    )
-    r = await remoting.request_access_token("http://s/token", "c", "a")
-    assert not r["success"]
-    assert r["status_code"] == code
-    assert r["error"] == f"bad: {err}"
-
-
-async def test_request_access_token_200_without_token(monkeypatch):
-    _patch(monkeypatch, lambda req: httpx.Response(200, json={"token_type": "Bearer"}))
-    r = await remoting.request_access_token("http://s/token", "c", "a")
-    assert not r["success"] and "no access token" in r["error"]
-
-
-async def test_request_access_token_network_error(monkeypatch):
-    def handler(request):
-        raise httpx.ConnectError("boom")
-
-    _patch(monkeypatch, handler)
-    r = await remoting.request_access_token("http://s/token", "c", "a")
-    assert not r["success"] and "boom" in r["error"]
-
-
-async def test_request_access_token_mock_mode(monkeypatch):
-    monkeypatch.setattr(remoting, "is_mock_mode", lambda: True)
-    r = await remoting.request_access_token("", "c", "")
-    assert r["success"] and r["access_token"]
-    assert r["expires_in"] == 3600 and r["scope"] == "read"
-
-
-KERI_URL = "https://api.example.io/slapv3/pdexv2/.well-known/keri"
-KERI_DOC = {
-    "onboarding_endpoint": "https://other.example.net/slapv3/keri/udap/onboarding",
-    "token_endpoint": "https://api.example.io/token",
-    "trust_anchor": {"aid": "Egleif"},
-}
-
-
-async def test_discover_keri_url_fetched_as_is(monkeypatch):
-    seen = []
-    monkeypatch.setenv("SIGNET_ONBOARDING_SERVER_AID", "Esrv")
-
-    def handler(request):
-        seen.append(str(request.url))
-        return httpx.Response(200, json=KERI_DOC)
-
-    _patch(monkeypatch, handler)
-    r = await remoting.discover_server(KERI_URL)
-    assert seen == [KERI_URL]
-    assert r == {
-        "success": True,
-        "onboarding_endpoint": KERI_DOC["onboarding_endpoint"],
-        "aid": "Esrv",
-        "registration_endpoint": "",
-        "token_endpoint": "https://api.example.io/token",
-    }
-
-
-async def test_discover_keri_without_server_aid(monkeypatch):
-    monkeypatch.delenv("SIGNET_ONBOARDING_SERVER_AID", raising=False)
-    _patch(monkeypatch, lambda req: httpx.Response(200, json=KERI_DOC))
-    r = await remoting.discover_server(KERI_URL)
-    assert r["success"] and r["aid"] == ""
-
-
-async def test_discover_keri_requires_onboarding_endpoint(monkeypatch):
-    _patch(monkeypatch, lambda req: httpx.Response(200, json={"trust_anchor": {}}))
-    r = await remoting.discover_server(KERI_URL)
-    assert not r["success"]
-
-
-async def test_submit_content_type_passthrough(monkeypatch):
-    seen = []
-
-    def handler(request):
-        seen.append(request)
-        return httpx.Response(202, json={"onboarding_id": "ob1"})
-
-    _patch(monkeypatch, handler)
-    await remoting.submit_onboarding(
-        "http://s", "http://s/x", b"{}", content_type="application/json"
-    )
-    assert seen[0].headers["content-type"] == "application/json"
-
-
-async def test_content_location_joined_against_request_url(monkeypatch):
-    _patch(
-        monkeypatch,
-        lambda req: httpx.Response(
-            202,
-            json={"onboarding_id": "ob1"},
-            headers={"Content-Location": "/slapv3/onboarding/ob1"},
-        ),
-    )
-    r = await remoting.submit_onboarding(
-        KERI_URL, "https://other.example.net/slapv3/keri/udap/onboarding", b"{}"
-    )
-    assert r["poll_url"] == "https://other.example.net/slapv3/onboarding/ob1"
-
-
-async def test_poll_keri_without_poll_url_errors(monkeypatch):
-    _patch(monkeypatch, lambda req: pytest.fail("no request expected"))
-    r = await remoting.poll_onboarding(KERI_URL, "ob1")
-    assert not r["success"] and "poll" in r["error"]
-
-
-async def test_submit_logs_request_and_response(monkeypatch):
-    messages = []
-    monkeypatch.setattr(remoting.logger, "info", messages.append)
-    _patch(
-        monkeypatch,
-        lambda req: httpx.Response(
-            403, text="<html>Forbidden</html>", headers={"Server": "azure"}
-        ),
-    )
-    body = json.dumps({"correlation_id": "c1", "ipex_grant": "X" * 500}).encode()
-    r = await remoting.submit_onboarding(
-        "http://s", "http://s/x", body, "application/json"
-    )
-    assert r["error"] == "API error: 403"
-    log = "\n".join(messages)
-    assert "POST http://s/x" in log and "application/json" in log
-    assert "<500 chars omitted>" in log and "XXXXX" not in log
-    assert "403" in log and "azure" in log and "<html>Forbidden</html>" in log
-
-
-async def test_discover_keri_endpoint_override(monkeypatch):
-    monkeypatch.setenv(
-        "SIGNET_ONBOARDING_ENDPOINT", "https://api.example.io/onboarding"
-    )
-    _patch(monkeypatch, lambda req: httpx.Response(200, json=KERI_DOC))
-    r = await remoting.discover_server(KERI_URL)
+async def test_discover_keri_applies_env_overrides(http, monkeypatch):
+    monkeypatch.setenv("SIGNET_ONBOARDING_ENDPOINT", "http://right/udap/onboarding")
+    monkeypatch.setenv("SIGNET_ONBOARDING_SERVER_AID", "Eenv")
+    url = "http://wrong/.well-known/keri"
+    http.get(url, json={"onboarding_endpoint": "http://wrong/udap/onboarding"})
+    r = await remoting.discover_server(url)
     assert r["success"]
-    assert r["onboarding_endpoint"] == "https://api.example.io/onboarding"
+    assert r["onboarding_endpoint"] == "http://right/udap/onboarding"
+    assert r["aid"] == "Eenv"
 
 
-async def test_discover_keri_override_replaces_missing_endpoint(monkeypatch):
-    monkeypatch.setenv(
-        "SIGNET_ONBOARDING_ENDPOINT", "https://api.example.io/onboarding"
-    )
-    _patch(monkeypatch, lambda req: httpx.Response(200, json={"trust_anchor": {}}))
-    r = await remoting.discover_server(KERI_URL)
-    assert (
-        r["success"] and r["onboarding_endpoint"] == "https://api.example.io/onboarding"
-    )
-
-
-async def test_discover_udap_ignores_endpoint_override(monkeypatch):
-    monkeypatch.setenv(
-        "SIGNET_ONBOARDING_ENDPOINT", "https://api.example.io/onboarding"
-    )
-    _patch(
-        monkeypatch,
-        lambda req: httpx.Response(
-            200, json={"onboarding_endpoint": "http://s/udap/onboarding", "aid": "Esrv"}
-        ),
-    )
-    r = await remoting.discover_server("http://s")
-    assert r["onboarding_endpoint"] == "http://s/udap/onboarding"
-
-
-DEBUG_PAGE = (
-    "<html><head><title>ValueError\n at /x</title><style>"
-    + "a{}" * 1000
-    + "</style></head><body>"
-    '<pre class="exception_value">bad &quot;grant&quot;</pre>'
-    '<textarea id="traceback_area" cols="140">Traceback (most recent call last):\n'
-    "  File x.py, line 1\nValueError: bad</textarea></body></html>"
-)
-
-
-async def test_html_error_page_is_summarised_and_saved(monkeypatch, tmp_path):
-    messages = []
-    monkeypatch.setattr(remoting.logger, "info", messages.append)
-    monkeypatch.setattr(remoting.tempfile, "gettempdir", lambda: str(tmp_path))
-    _patch(
-        monkeypatch,
-        lambda req: httpx.Response(
-            500,
-            text=DEBUG_PAGE,
-            headers={"content-type": "text/html", "Correlation-ID": "cid1"},
-        ),
-    )
-    r = await remoting.submit_onboarding("http://s", "http://s/x", b"{}")
-    log = "\n".join(messages)
-    assert 'exception: bad "grant"' in log
-    assert "Traceback (most recent call last)" in log
-    assert (tmp_path / "signet-onboarding-last-response.html").read_text() == DEBUG_PAGE
-    assert r["correlation_id"] == "cid1" and "cid1" in r["error"]
-
-
-SAFHIR_ACCEPTED = {
-    "correlation_id": "c1",
-    "aid": "Eaid",
-    "purpose": "TREAT",
-    "status": "in-review",
-    "review_id": "rev-1",
-    "decision_due": "2026-10-12T20:01:04+00:00",
-}
-OVERRIDE = "https://api.example.io/slapv3/keri/udap/onboarding"
-WRONG_HOST_LOCATION = "https://wrong.example.net/slapv3/keri/udap/onboarding/rev-1/"
-
-
-async def test_submit_review_id_and_poll_url_rebased(monkeypatch):
-    monkeypatch.setenv("SIGNET_ONBOARDING_ENDPOINT", OVERRIDE)
-    _patch(
-        monkeypatch,
-        lambda req: httpx.Response(
-            202, json=SAFHIR_ACCEPTED, headers={"Content-Location": WRONG_HOST_LOCATION}
-        ),
-    )
-    r = await remoting.submit_onboarding(KERI_URL, OVERRIDE, b"{}")
-    assert r["onboarding_id"] == "rev-1"
-    assert r["decision_due"] == "2026-10-12T20:01:04+00:00"
-    assert r["status"] == "in-review" and not r["terminal"]
-    assert r["poll_url"] == "https://api.example.io/slapv3/keri/udap/onboarding/rev-1/"
-
-
-async def test_poll_rebases_stored_poll_url(monkeypatch):
-    monkeypatch.setenv("SIGNET_ONBOARDING_ENDPOINT", OVERRIDE)
-    seen = []
-
-    def handler(request):
-        seen.append(str(request.url))
-        return httpx.Response(200, json={**SAFHIR_ACCEPTED, "status": "approved"})
-
-    _patch(monkeypatch, handler)
-    r = await remoting.poll_onboarding(KERI_URL, "rev-1", WRONG_HOST_LOCATION)
-    assert seen == ["https://api.example.io/slapv3/keri/udap/onboarding/rev-1/"]
-    assert r["terminal"] and r["status"] == "approved"
-
-
-async def test_poll_url_not_rebased_without_override_or_for_udap(monkeypatch):
-    monkeypatch.delenv("SIGNET_ONBOARDING_ENDPOINT", raising=False)
-    assert (
-        remoting._rebase_poll_url(KERI_URL, WRONG_HOST_LOCATION) == WRONG_HOST_LOCATION
-    )
-    monkeypatch.setenv("SIGNET_ONBOARDING_ENDPOINT", OVERRIDE)
-    assert remoting._rebase_poll_url("http://s", "http://s/p/1") == "http://s/p/1"
-
-
-KERI_DCR_DOC = {
-    **KERI_DOC,
-    "registration_endpoint": "https://api.example.io/slapv3/keri/register/",
-}
-
-
-async def test_discover_keri_returns_registration_endpoint(monkeypatch):
-    _patch(monkeypatch, lambda req: httpx.Response(200, json=KERI_DCR_DOC))
-    r = await remoting.discover_server(KERI_URL)
-    assert r["registration_endpoint"] == KERI_DCR_DOC["registration_endpoint"]
-    assert r["token_endpoint"] == KERI_DOC["token_endpoint"]
-
-
-async def test_discover_json_overrides_win(monkeypatch):
+async def test_discover_json_format_overrides_registration_and_token(http, monkeypatch):
     monkeypatch.setenv("SIGNET_ONBOARDING_FORMAT", "json")
-    monkeypatch.setenv("SIGNET_REGISTRATION_ENDPOINT", "http://o/register/")
-    monkeypatch.setenv("SIGNET_TOKEN_ENDPOINT", "http://o/token/")
-    _patch(monkeypatch, lambda req: httpx.Response(200, json=KERI_DCR_DOC))
-    r = await remoting.discover_server(KERI_URL)
-    assert r["registration_endpoint"] == "http://o/register/"
-    assert r["token_endpoint"] == "http://o/token/"
-
-
-async def test_discover_cesr_ignores_dcr_overrides(monkeypatch):
-    monkeypatch.delenv("SIGNET_ONBOARDING_FORMAT", raising=False)
-    monkeypatch.setenv("SIGNET_REGISTRATION_ENDPOINT", "http://o/register/")
-    monkeypatch.setenv("SIGNET_TOKEN_ENDPOINT", "http://o/token/")
-    _patch(monkeypatch, lambda req: httpx.Response(200, json=KERI_DCR_DOC))
-    r = await remoting.discover_server(KERI_URL)
-    assert r["registration_endpoint"] == KERI_DCR_DOC["registration_endpoint"]
-    assert r["token_endpoint"] == KERI_DOC["token_endpoint"]
-
-
-async def test_register_to_explicit_url(monkeypatch):
-    seen = []
-
-    def handler(request):
-        seen.append(str(request.url))
-        return httpx.Response(
-            201, json={"client_id": "C", "scope": "system/Group.read"}
-        )
-
-    _patch(monkeypatch, handler)
-    r = await remoting.register_dynamic_client(
-        KERI_URL, {"purpose": "TREAT"}, url="http://s/slapv3/keri/register/"
+    monkeypatch.setenv("SIGNET_REGISTRATION_ENDPOINT", "http://r/register")
+    monkeypatch.setenv("SIGNET_TOKEN_ENDPOINT", "http://r/token")
+    http.get(
+        f"{SERVER}/.well-known/udap",
+        json={
+            "onboarding_endpoint": f"{SERVER}/udap/onboarding",
+            "aid": "Esrv",
+            "registration_endpoint": f"{SERVER}/register",
+            "token_endpoint": f"{SERVER}/token",
+        },
     )
-    assert seen == ["http://s/slapv3/keri/register/"]
-    assert r["success"] and r["scopes"] == "system/Group.read"
+    r = await remoting.discover_server(SERVER)
+    assert r["registration_endpoint"] == "http://r/register"
+    assert r["token_endpoint"] == "http://r/token"
 
 
-async def test_register_200_succeeds_only_in_json_format(monkeypatch):
-    _patch(
-        monkeypatch,
-        lambda req: httpx.Response(200, json={"client_id": "C", "scope": "s"}),
+async def test_register_dynamic_client(http):
+    http.post(
+        f"{SERVER}/register",
+        status=201,
+        json={"client_id": "srv-1", "scope": ["a", "b"]},
     )
-    monkeypatch.delenv("SIGNET_ONBOARDING_FORMAT", raising=False)
-    r = await remoting.register_dynamic_client("http://s", {})
-    assert not r["success"] and r["status_code"] == 200
-
-    monkeypatch.setenv("SIGNET_ONBOARDING_FORMAT", "json")
-    r = await remoting.register_dynamic_client("http://s", {})
-    assert r["success"] and r["client_id"] == "C"
+    r = await remoting.register_dynamic_client(SERVER, {"udap": "1"})
+    assert http.calls[0].request.headers["Content-Type"] == "application/json"
+    assert r["success"] and r["client_id"] == "srv-1"
+    assert r["scopes"] == "a b"
 
 
-async def test_register_201_succeeds_in_json_format(monkeypatch):
-    monkeypatch.setenv("SIGNET_ONBOARDING_FORMAT", "json")
-    _patch(monkeypatch, lambda req: httpx.Response(201, json={"client_id": "C"}))
-    r = await remoting.register_dynamic_client("http://s", {})
+async def test_register_posts_to_the_given_url(http):
+    http.post("http://other/reg", status=201, json={"client_id": "srv-1"})
+    r = await remoting.register_dynamic_client(SERVER, {}, url="http://other/reg")
     assert r["success"] and r["scopes"] == ""
 
 
-async def test_register_unapproved_error_includes_layer_and_review(monkeypatch):
-    _patch(
-        monkeypatch,
-        lambda req: httpx.Response(
-            400,
-            json={
-                "error": "unapproved_software_statement",
-                "failed_layer": "aid_purpose",
-                "review_endpoint": "http://s/review/1",
-            },
-        ),
+async def test_repeated_registration_200_succeeds_only_in_json_format(
+    http, monkeypatch
+):
+    http.post(f"{SERVER}/register", status=200, json={"client_id": "srv-1"})
+    assert not (await remoting.register_dynamic_client(SERVER, {}))["success"]
+    monkeypatch.setenv("SIGNET_ONBOARDING_FORMAT", "json")
+    assert (await remoting.register_dynamic_client(SERVER, {}))["success"]
+
+
+async def test_register_error_keeps_rfc7591_code_and_status(http):
+    http.post(
+        f"{SERVER}/register",
+        status=400,
+        json={"error": "invalid_software_statement", "correlation_id": "c9"},
     )
-    r = await remoting.register_dynamic_client("http://s", {})
+    r = await remoting.register_dynamic_client(SERVER, {})
     assert not r["success"]
-    assert r["error"] == (
-        "unapproved_software_statement "
-        "(failed layer: aid_purpose; review: http://s/review/1)"
-    )
+    assert r["status_code"] == 400 and r["correlation_id"] == "c9"
+    assert "invalid_software_statement" in r["error"]
 
 
-async def test_register_logs_elide_grant(monkeypatch):
-    logged = []
-    monkeypatch.setattr(remoting, "_log_request", lambda *a: logged.append(a))
-    _patch(monkeypatch, lambda req: httpx.Response(201, json={"client_id": "C"}))
-    await remoting.register_dynamic_client(
-        "http://s", {"ipex_grant": "X" * 50, "purpose": "TREAT"}
+@pytest.mark.parametrize(
+    "call, mock",
+    [
+        (lambda: remoting.discover_server("http://x"), "mock_discover_server"),
+        (
+            lambda: remoting.submit_onboarding("http://x", "http://x/y", b""),
+            "mock_submit_onboarding",
+        ),
+        (lambda: remoting.poll_onboarding("http://x", "ob1"), "mock_poll_onboarding"),
+        (
+            lambda: remoting.register_dynamic_client("http://x", {}),
+            "mock_register_dynamic_client",
+        ),
+    ],
+)
+async def test_mock_mode_never_reaches_the_library(monkeypatch, call, mock):
+    monkeypatch.setattr(remoting, "is_mock_mode", lambda: True)
+    monkeypatch.setattr(mock_data, mock, lambda *args: {"success": True, "mock": mock})
+    monkeypatch.setattr(
+        remoting, "_call", lambda *a: pytest.fail("the library must not be called")
     )
-    assert "50 chars omitted" in logged[0][3] and "XXXX" not in logged[0][3]
+    assert await call() == {"success": True, "mock": mock}

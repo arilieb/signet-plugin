@@ -8,39 +8,30 @@ and the view dialog, so every path persists the same richer server state.
 
 from typing import Any
 
+from acdc_auth_client.core.flows import apply_onboarding_decision, normalize_status
+from acdc_auth_client.models.onboarding import OnboardingDecision
 from keri.help import helping
 
 from ..core import remoting
 from ..db.basing import SignetConnection
 
-
-def normalize_status(status: str) -> str:
-    """Map onboarding-doc status strings onto the 4-bucket SignetConnection.status."""
-    if status == "approved":
-        return "approved"
-    if status == "rejected":
-        return "rejected"
-    return "needs_approval"
+__all__ = ["apply_result", "normalize_status", "refresh_connection"]
 
 
 def apply_result(connection: SignetConnection, result: dict[str, Any]) -> None:
-    """Copy a successful submit/poll result onto the connection."""
-    connection.last_checked_at = helping.nowIso8601()
-    connection.last_error = ""
-    connection.status = normalize_status(result.get("status", ""))
-    connection.onboarding_id = result.get("onboarding_id") or connection.onboarding_id
-    connection.correlation_id = (
-        result.get("correlation_id") or connection.correlation_id
+    """Copy a successful submit/poll result (``remoting``'s dict) onto the connection."""
+    decision = OnboardingDecision(
+        terminal=bool(result.get("terminal")),
+        onboarding_id=result.get("onboarding_id"),
+        status=result.get("status", ""),
+        decision_due=result.get("decision_due") or "",
+        correlation_id=result.get("correlation_id") or "",
+        purpose_status=result.get("purpose_status") or "",
+        decision_provenance=result.get("decision_provenance") or {},
+        poll_url=result.get("poll_url") or "",
+        retry_after=result.get("retry_after") or "",
     )
-    connection.poll_url = result.get("poll_url") or connection.poll_url
-    connection.decision_due = result.get("decision_due") or connection.decision_due
-    connection.retry_after = result.get("retry_after") or ""
-    connection.purpose_status = (
-        result.get("purpose_status") or connection.purpose_status
-    )
-    connection.decision_provenance = (
-        result.get("decision_provenance") or connection.decision_provenance
-    )
+    apply_onboarding_decision(connection, decision)
 
 
 async def refresh_connection(db, connection: SignetConnection) -> dict[str, Any]:

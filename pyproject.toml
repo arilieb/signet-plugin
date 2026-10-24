@@ -27,14 +27,19 @@ classifiers = [
 
 dependencies = [
     "locksmith>=0.0.1",
-    "httpx==0.28.1"
+    "acdc-auth-client",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest",
     "pytest-asyncio",
+    "responses>=0.23.0",
 ]
+
+# acdc-auth-client has no release or tag yet: resolve it from the sibling checkout.
+[tool.uv.sources]
+acdc-auth-client = { path = "../echelon-client", editable = true }
 
 [project.entry-points."locksmith.plugins"]
 signet = "signet.plugin:SignetPlugin"

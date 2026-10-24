@@ -40,6 +40,18 @@ python ./scripts/generate_qrc.py && pyside6-rcc resources.qrc -o resources_rc.py
 
 From the locksmith repo venv, run `pip install -e .`.
 
+The protocol and flow logic (discovery, onboarding, DCR, token, FHIR export, the IPEX request
+builders) lives in the `acdc-auth-client` library (the `echelon-client` repo), which the plugin
+calls through `core/remoting.py` and `core/presenting.py`. It is not released yet, so install it
+into the same venv from a checkout (it needs keri `~=1.3.5`, as Locksmith does):
+
+```
+pip install -e ../echelon-client
+```
+
+(`uv sync` in this repo resolves it from the sibling `../echelon-client` checkout, see
+`[tool.uv.sources]` in `pyproject.toml`.)
+
 ## Live local onboarding (development)
 
 > **Status:** these scripts and steps were written but not yet run end to end. Treat every command as unverified until you have run it.

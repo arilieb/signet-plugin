@@ -18,15 +18,19 @@ from typing import Any
 
 from keri import help
 
-from .configing import ECR_SCHEMA_SAID, accepted_credential_schemas, is_mock_mode
+from acdc_auth_client.constants import (  # noqa: F401 (re-exported)
+    ECR_SCHEMA_SAID,
+    LE_SUBUNIT_SCHEMA_SAID,
+    LEGAL_ENTITY_SCHEMA_SAID,
+)
+
+from .configing import accepted_credential_schemas, is_mock_mode
 
 logger = help.ogler.getLogger(__name__)
 
-LEGAL_ENTITY_SCHEMA_SAID = "ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY"
-
-# Legal Entity Subunit credential schema SAID (keep in sync with SCHEMA_LE_SUBUNIT in
-# scripts/dev-live/env.sh; it may change on re-saidification).
-LE_SUBUNIT_SCHEMA_SAID = "EP1jGIb7KXotuUZJf1NSu5wQ089epFfv93cpZECj-YBs"
+# The Legal Entity and Legal Entity Subunit schema SAIDs (keep in sync with
+# SCHEMA_LE_SUBUNIT in scripts/dev-live/env.sh; they may change on re-saidification)
+# live in acdc_auth_client.constants.
 
 # Seeded so the "Select Credential" dropdown in AddConnectionDialog isn't
 # empty in mock mode (never in live dev, which must use real credentials).
