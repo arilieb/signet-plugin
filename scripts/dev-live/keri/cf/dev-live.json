@@ -6,12 +6,12 @@
     "http://127.0.0.1:5643/oobi/BLskRTInXnMxWaGqcpSyMgo0nYbalW99cGZESrz3zapM/controller"
   ],
   "durls": [
-    "http://127.0.0.1:7723/oobi/EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao",
-    "http://127.0.0.1:7723/oobi/ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY",
-    "http://127.0.0.1:7723/oobi/EEy9PkikFcANV1l7EHukCeXqrzT1hNZjGlUk7wuMO5jw",
-    "http://127.0.0.1:7723/oobi/EH6ekLjSr8V32WyFbGe1zXjTzFs9PkTYmupJ9H65O14g",
-    "http://127.0.0.1:7723/oobi/EP1jGIb7KXotuUZJf1NSu5wQ089epFfv93cpZECj-YBs",
-    "http://127.0.0.1:7723/oobi/ECoqb1jxC9f9zwh664stMAy6gpnNduvP_3SCQlLvkPAR",
-    "http://127.0.0.1:7723/oobi/EHfJ563sbivepFRzk506fJenWIeVG2uXdAes8iJhHJan"
+    "https://healthkeri-schema.sfo3.digitaloceanspaces.com/oobi/EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao",
+    "https://healthkeri-schema.sfo3.digitaloceanspaces.com/oobi/ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY",
+    "https://healthkeri-schema.sfo3.digitaloceanspaces.com/oobi/EEy9PkikFcANV1l7EHukCeXqrzT1hNZjGlUk7wuMO5jw",
+    "https://healthkeri-schema.sfo3.digitaloceanspaces.com/oobi/EH6ekLjSr8V32WyFbGe1zXjTzFs9PkTYmupJ9H65O14g",
+    "https://healthkeri-schema.sfo3.digitaloceanspaces.com/oobi/EP1jGIb7KXotuUZJf1NSu5wQ089epFfv93cpZECj-YBs",
+    "https://healthkeri-schema.sfo3.digitaloceanspaces.com/oobi/ECoqb1jxC9f9zwh664stMAy6gpnNduvP_3SCQlLvkPAR",
+    "https://healthkeri-schema.sfo3.digitaloceanspaces.com/oobi/EHfJ563sbivepFRzk506fJenWIeVG2uXdAes8iJhHJan"
   ]
 }

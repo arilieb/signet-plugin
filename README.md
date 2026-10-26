@@ -56,7 +56,7 @@ pip install -e ../echelon-client
 
 > **Status:** these scripts and steps were written but not yet run end to end. Treat every command as unverified until you have run it.
 
-By default `LOCKSMITH_ENVIRONMENT=development` runs signet in mock mode (canned responses, fake seeded connections). Setting `SIGNET_LIVE=1` in development switches to the real single-IPEX-grant onboarding (the grant's exn signature is the only signature) against local infrastructure. Three credential chains are supported (pick one per run; see Troubleshooting for switching):
+By default `LOCKSMITH_ENVIRONMENT=development` runs signet in mock mode (canned responses, fake seeded connections). Setting `SIGNET_LIVE=1` in development switches to the real single-IPEX-grant onboarding (the grant's exn signature is the only signature) against local infrastructure. Schemas come from the healthKERI bucket, so no local schema server is needed. Three credential chains are supported (pick one per run; see Troubleshooting for switching):
 
 - **LESR subunit** (the main onboarding credential, `issue-chain-lesr-subunit.sh`): GLEIF External -> QVI -> LE (Practice) -> LE Subunit (Practice -> holder AID) -> LESR Auth (Practice -> QVI AID) -> LESR (QVI -> holder AID). The chain is linear: the LESR has a single `auth` edge.
 - **LESR simple** (for orgs without subunits, `issue-chain-lesr-simple.sh`): GLEIF External -> QVI -> LE (issued to the holder AID, which *is* the Legal Entity AID) -> LESR Auth (holder -> QVI AID, `le` edge) -> LESR (QVI -> holder AID). The holder's keys live only in the Locksmith vault, so the live-dev bootstrap issues the LESR Auth in-process and grants it to the QVI (`SIGNET_DEV_LESR_AUTH_FILE`); the script waits for that grant before it issues the LESR. No echelon-server config is rendered for this chain.
@@ -87,7 +87,7 @@ By default `LOCKSMITH_ENVIRONMENT=development` runs signet in mock mode (canned 
 
 ### Prerequisites
 
-- keripy `kli`, echelon-server, Locksmith, the registrar and vLEI each in their own venv. Registrar pins `keri~=1.3.4`; the others use 1.3.6 (the local keripy checkout reports 1.3.5), so keep each tool in its own environment.
+- keripy `kli`, echelon-server, Locksmith and the registrar each in their own venv. Registrar pins `keri~=1.3.4`; the others use 1.3.6 (the local keripy checkout reports 1.3.5), so keep each tool in its own environment.
 - Keystores are created under the keri base `signet-dev-live`; `--reset` deletes only that base. Never `rm -rf /usr/local/var/keri`.
 
 ### Run order
@@ -103,12 +103,7 @@ rm -rf /usr/local/var/keri/*
 cd ~/healthkeri/keripy && kli witness demo
 ```
 #### 2 schemas
-Build the combined schema directory (vital's LESR-chain schemas plus the GLEIF ones, symlinked into `scripts/dev-live/generated/schemas`) and serve it. This replaces the default `-s ./schema/acdc` and is needed by both chains, because `dev-live.json` resolves the new schema OOBIs at `kli init`.
-```bash
-cd ~/healthkeri/signet-plugin && scripts/dev-live/serve-schemas.sh          # builds the dir, prints the command
-cd ~/healthkeri/vLEI && vLEI-server -s ~/healthkeri/signet-plugin/scripts/dev-live/generated/schemas -c ./samples/acdc -o ./samples/oobis -p 7723
-```
-(`serve-schemas.sh --run` builds and launches it in one step.) Restart any vLEI-server that is already running. Check that each new schema OOBI returns the schema JSON, not an empty 200: `curl http://127.0.0.1:7723/oobi/<SAID>` (SAIDs are in `scripts/dev-live/env.sh`).
+Nothing to run. All schemas are fetched from the healthKERI bucket (`https://healthkeri-schema.sfo3.digitaloceanspaces.com/oobi/{SAID}`, `SCHEMA_SERVER` in `scripts/dev-live/env.sh`), and `dev-live.json` / `Registrar.json` resolve their OOBIs at `kli init`. The machine needs network access to it. Check one: `curl https://healthkeri-schema.sfo3.digitaloceanspaces.com/oobi/<SAID>` (SAIDs are in `scripts/dev-live/env.sh`). The issue scripts preflight all of them.
 
 #### 3 Locksmith + signet in live dev; 
 on vault open the holder "signet-dev-holder" is created and its AID logged. Leave it running (it must receive the grants).
@@ -253,11 +248,11 @@ curl -H "CESR-DESTINATION: BBilc4-L3tFUnfM_wJr4S4OJanAv_VmF_dJNN6vkf2Ha" \
 
 - **INDETERMINATE key state** in server logs: the witness lacks the holder KEL (inception not receipted) or the witness location is unknown to the server. Check the `/log?pre=` curl above.
 - **Registrar 404 on `/credential/<said>?chains=true`**: the chain was not imported into the Registrar keystore; rerun the issue script with `--reset`.
-- **Port conflicts**: witnesses use 5642-5644, vLEI-server 7723, echelon 8000, registrar 8080.
+- **Port conflicts**: witnesses use 5642-5644, echelon 8000, registrar 8080.
 - **Grants not appearing in Locksmith**: grants are admitted by a background doer every ~2s once the issuer OOBIs (`SIGNET_DEV_OOBIS`) have resolved; also each time the Add Connection dialog loads.
 - **No credential in the dropdown**: the credential must be admitted in the vault, which needs the earlier chain grants admitted first (LESR subunit: QVI, LE, LE Subunit and LESR Auth; LESR simple: QVI, LE and LESR Auth; ECR: QVI, LE and ECR Auth). Also check that `SIGNET_CREDENTIAL_SCHEMAS` (from `env.out`) names the chain you issued; unset, only the LESR is listed (set it to the ECR SAID for the ECR chain).
-- **Switching between the ECR and LESR chains** (any two of the three): all share the keystore base `signet-dev-live` and `generated/`, so run the other issue script with `--reset` (and restart Locksmith with the new `env.out`). `--reset` keeps `generated/schemas`.
+- **Switching between the ECR and LESR chains** (any two of the three): all share the keystore base `signet-dev-live` and `generated/`, so run the other issue script with `--reset` (and restart Locksmith with the new `env.out`).
 - **`issue-chain-lesr-simple.sh` times out waiting for the LESR Auth**: Locksmith must be restarted with `env.out` (`SIGNET_DEV_LESR_AUTH_FILE` set), must have admitted the QVI and LE credentials, and the holder must be receipted by its witnesses; look for `LESR Auth step failed (retrying)` in the Locksmith log. The step retries every 60s.
-- **Schema OOBI returns 200 with an empty body**, or the issue script's preflight fails: the vLEI-server is not serving the combined schema dir; run `serve-schemas.sh` and restart it with `-s .../generated/schemas`.
+- **The issue script's schema preflight fails**: the schema bucket is unreachable from this machine, or the SAID is not published there (`curl` the URL it prints).
 
 With `server-lesr.config.review.yaml` (or `server-ecr.config.review.yaml`; empty whitelist) the gate is never offered while pending; a DCR sent without an approved record returns 403 `access_denied`.

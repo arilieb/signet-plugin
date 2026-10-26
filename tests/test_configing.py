@@ -49,6 +49,9 @@ def test_dev_oobis_include_extras(monkeypatch):
     oobis = devbootstrap.dev_oobis()
     assert oobis[-2:] == ["http://a/oobi/E1", "http://b/oobi/E2"]
     assert len(oobis) == 12
+    schema_oobis = [o for o in oobis if o.startswith(devbootstrap.SCHEMA_SERVER)]
+    assert schema_oobis == [f"{devbootstrap.SCHEMA_SERVER}/oobi/{s}" for s in devbootstrap.SCHEMA_SAIDS]
+    assert devbootstrap.SCHEMA_SERVER == "https://healthkeri-schema.sfo3.digitaloceanspaces.com"
 
 
 def test_accepted_credential_schemas(monkeypatch):

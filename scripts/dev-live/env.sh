@@ -19,8 +19,8 @@ export SCHEMA_LE_SUBUNIT="EP1jGIb7KXotuUZJf1NSu5wQ089epFfv93cpZECj-YBs"
 export SCHEMA_LESR_AUTH="ECoqb1jxC9f9zwh664stMAy6gpnNduvP_3SCQlLvkPAR"
 export SCHEMA_LESR="EHfJ563sbivepFRzk506fJenWIeVG2uXdAes8iJhHJan"
 
-# vLEI-server serving the combined schema dir (see serve-schemas.sh)
-export SCHEMA_SERVER="http://127.0.0.1:7723"
+# healthKERI schema bucket; schema OOBIs are ${SCHEMA_SERVER}/oobi/<SAID> (keri/cf/*.json and signet devbootstrap.py hardcode the same host)
+export SCHEMA_SERVER="https://healthkeri-schema.sfo3.digitaloceanspaces.com"
 
 # kli --base shorthand; names have no spaces so $KB can be expanded unquoted
 export KB="--base ${DEV_LIVE_BASE}"

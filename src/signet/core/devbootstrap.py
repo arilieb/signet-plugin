@@ -4,9 +4,10 @@ signet.core.devbootstrap module
 
 Live-dev bootstrap (SIGNET_LIVE=1 in the DEVELOPMENT environment). Idempotent
 setup of the holder state the real onboarding flow needs against local
-infrastructure (kli witness demo, vLEI-server, registrar, echelon-server):
+infrastructure (kli witness demo, registrar, echelon-server) plus the healthKERI
+schema bucket:
 
-- queue OOBI resolution for the demo witnesses, the vLEI schemas, and any
+- queue OOBI resolution for the demo witnesses, the schema bucket's schemas, and any
   extra OOBIs (e.g. the QVI and LE AIDs) in SIGNET_DEV_OOBIS;
 - create a witnessed holder AID named ``signet-dev-holder``;
 - from a vault doer, poll the holder's witnesses as mailboxes (Locksmith's
@@ -46,10 +47,10 @@ WITNESS_OOBIS = (
     "http://127.0.0.1:5644/oobi/BIKKuvBwpmDVA4Ds-EpL5bt9OqPzWPja2LigFYZN2YfX/controller",
 )
 WITNESS_AIDS = tuple(oobi.split("/")[4] for oobi in WITNESS_OOBIS)
-SCHEMA_SERVER = "http://127.0.0.1:7723"
+SCHEMA_SERVER = "https://healthkeri-schema.sfo3.digitaloceanspaces.com"
 # LESR Authorization schema (keep in sync with SCHEMA_LESR_AUTH in scripts/dev-live/env.sh)
 LESR_AUTH_SCHEMA_SAID = "ECoqb1jxC9f9zwh664stMAy6gpnNduvP_3SCQlLvkPAR"
-# QVI, LE, ECR Auth, ECR, LE Subunit, LESR Auth, LESR schemas (keep in sync with scripts/dev-live/env.sh)
+# QVI, LE, ECR Auth, ECR, LE Subunit, LESR Auth, LESR schemas (keep in sync with scripts/dev-live/env.sh and keri/cf/*.json)
 SCHEMA_SAIDS = (
     "EBfdlu8R27Fbx-ehrqwImnK-8Cm79sqbAQ4MmvEAYqao",
     "ENPXp1vQzRF6JwIuS-mp2U8Uf1MoADoP_GqQ62VsDZWY",

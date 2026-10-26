@@ -5,7 +5,7 @@
 #     -> LESR Auth (Practice -> QVI AID, names the holder) -> LESR (QVI -> holder AID)
 #   QVI also issues an LE credential to Provider, the echelon-server identity.
 #
-# Prerequisites: `kli witness demo` and vLEI-server on :7723 serving the combined schema dir (serve-schemas.sh).
+# Prerequisites: `kli witness demo` and network access to the schema bucket (SCHEMA_SERVER in env.sh).
 # Run Locksmith with SIGNET_LIVE=1 first so the holder exists, then:
 #
 #   source scripts/dev-live/env.sh
@@ -21,8 +21,8 @@ HOLDER_AID="${1:-}"
 
 curl -s -m3 -o /dev/null http://127.0.0.1:5642/ || { echo "demo witnesses are not running (kli witness demo)"; exit 1; }
 for s in "$SCHEMA_QVI" "$SCHEMA_LE" "$SCHEMA_LE_SUBUNIT" "$SCHEMA_LESR_AUTH" "$SCHEMA_LESR"; do
-  curl -fsS -m3 "${SCHEMA_SERVER}/oobi/${s}" 2>/dev/null | grep -q "$s" \
-    || { echo "vLEI-server does not serve schema ${s} on ${SCHEMA_SERVER}; run serve-schemas.sh and restart it with the combined dir"; exit 1; }
+  curl -fsS -m10 "${SCHEMA_SERVER}/oobi/${s}" 2>/dev/null | grep -q "$s" \
+    || { echo "schema ${s} is not available at ${SCHEMA_SERVER}/oobi/${s} (bucket unreachable or SAID not published)"; exit 1; }
 done
 
 KERI_ROOT=/usr/local/var/keri
@@ -32,8 +32,7 @@ if [ "${2:-}" = "--reset" ]; then
   for d in "$KERI_ROOT"/*/"${DEV_LIVE_BASE}"; do
     [ -d "$d" ] && { echo "removing $d"; rm -rf "$d"; }
   done
-  # keep generated/schemas (serve-schemas.sh output; vLEI-server reads it)
-  find "${DEV_LIVE_OUT}" -mindepth 1 -maxdepth 1 ! -name schemas -exec rm -rf {} +
+  find "${DEV_LIVE_OUT}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 elif kli aid --name External --base "${DEV_LIVE_BASE}" --alias External >/dev/null 2>&1; then
   echo "keystores already exist under base ${DEV_LIVE_BASE}; re-run with --reset"; exit 1
 fi
