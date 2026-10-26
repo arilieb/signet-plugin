@@ -151,15 +151,18 @@ kli ipex grant --name QVI $KB --alias QVI --said "$LESR" --recipient "$HOLDER_AI
 
 # 8. Outputs for the other processes
 SERVER_CONFIG="${DEV_LIVE_DIR}/server-lesr.config.yaml"
-render() {  # whitelist-line output
+render() {  # whitelist-line template output
   sed -e "s/__EXTERNAL_AID__/${EXTERNAL_AID}/g" -e "s/__QVI_AID__/${QVI_AID}/g" -e "s/__PRACTICE_AID__/${PRACTICE_AID}/g" \
       -e "s/__SCHEMA_QVI__/${SCHEMA_QVI}/g" -e "s/__SCHEMA_LE__/${SCHEMA_LE}/g" \
       -e "s/__SCHEMA_LE_SUBUNIT__/${SCHEMA_LE_SUBUNIT}/g" -e "s/__SCHEMA_LESR_AUTH__/${SCHEMA_LESR_AUTH}/g" \
       -e "s/__SCHEMA_LESR__/${SCHEMA_LESR}/g" \
-      -e "s|__WHITELIST__|$1|" "${DEV_LIVE_DIR}/server-lesr.config.yaml.tmpl" > "$2"
+      -e "s|__WHITELIST__|$1|" "${DEV_LIVE_DIR}/$2" > "$3"
 }
-render "[{qvi_aid: ${QVI_AID}}]" "${SERVER_CONFIG}"
-render "[]" "${DEV_LIVE_DIR}/server-lesr.config.review.yaml"
+render "[{qvi_aid: ${QVI_AID}}]" server-lesr.config.yaml.tmpl "${SERVER_CONFIG}"
+render "[]" server-lesr.config.yaml.tmpl "${DEV_LIVE_DIR}/server-lesr.config.review.yaml"
+# json wire format (echelon-server wire_format: json); the same chain, a different onboarding policy
+render "[{qvi_aid: ${QVI_AID}}]" server-lesr.config.json.yaml.tmpl "${DEV_LIVE_DIR}/server-lesr.config.json.yaml"
+render "[]" server-lesr.config.json.yaml.tmpl "${DEV_LIVE_DIR}/server-lesr.config.json.review.yaml"
 
 # Schema OOBIs for the LESR-chain SAIDs ride along with the issuer OOBIs so Locksmith resolves them at startup
 SCHEMA_OOBIS="${SCHEMA_SERVER}/oobi/${SCHEMA_LE_SUBUNIT},${SCHEMA_SERVER}/oobi/${SCHEMA_LESR_AUTH},${SCHEMA_SERVER}/oobi/${SCHEMA_LESR}"
@@ -180,5 +183,6 @@ Chain issued and granted to ${HOLDER_AID}.
 Next:
   registrar start --name Registrar --base ${DEV_LIVE_BASE} --alias Registrar --issuer ${QVI_AID}
   echelons serve --host 127.0.0.1 --port 8000 --name Provider --base ${DEV_LIVE_BASE} --alias Provider --config ${SERVER_CONFIG}
+  (json wire format: use ${DEV_LIVE_DIR}/server-lesr.config.json.yaml, or .json.review.yaml for 202 in-review)
   Locksmith: source ${DEV_LIVE_OUT}/env.out (restart so it resolves the issuer/schema OOBIs and admits the grants)
 DONE

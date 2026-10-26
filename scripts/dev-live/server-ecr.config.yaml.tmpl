@@ -73,3 +73,7 @@ onboarding:
       response_types: [code]
   # Whitelisted QVI -> 200 approved. server-ecr.config.review.yaml has an empty list -> 202 in-review.
   whitelist: __WHITELIST__
+
+# FHIR stub (echelon-server feat-json-wire): serves /Group and $davinci-data-export behind the /token bearer.
+fhir:
+  enabled: true

@@ -171,3 +171,5 @@ cython_debug/
 scripts/dev-live/generated/
 scripts/dev-live/server-*.config.yaml
 scripts/dev-live/server-*.config.review.yaml
+scripts/dev-live/server-*.config.json.yaml
+scripts/dev-live/server-*.config.json.review.yaml
