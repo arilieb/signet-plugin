@@ -146,6 +146,17 @@ export HOLDER_AID=${HOLDER_AID}
 export QVI_AID=${QVI_AID}
 OUT
 
+render() {  # whitelist-line template output
+  sed -e "s/__EXTERNAL_AID__/${EXTERNAL_AID}/g" -e "s/__QVI_AID__/${QVI_AID}/g" -e "s/__HOLDER_AID__/${HOLDER_AID}/g" \
+      -e "s/__SCHEMA_QVI__/${SCHEMA_QVI}/g" -e "s/__SCHEMA_LE__/${SCHEMA_LE}/g" \
+      -e "s/__SCHEMA_LESR_AUTH__/${SCHEMA_LESR_AUTH}/g" -e "s/__SCHEMA_LESR__/${SCHEMA_LESR}/g" \
+      -e "s|__WHITELIST__|$1|" "${DEV_LIVE_DIR}/$2" > "$3"
+}
+render "[{qvi_aid: ${QVI_AID}}]" server-lesr-simple.config.yaml.tmpl "${DEV_LIVE_DIR}/server-lesr.config.yaml"
+render "[]" server-lesr-simple.config.yaml.tmpl "${DEV_LIVE_DIR}/server-lesr.config.review.yaml"
+render "[{qvi_aid: ${QVI_AID}}]" server-lesr-simple.config.json.yaml.tmpl "${DEV_LIVE_DIR}/server-lesr.config.json.yaml"
+render "[]" server-lesr-simple.config.json.yaml.tmpl "${DEV_LIVE_DIR}/server-lesr.config.json.review.yaml"
+
 cat <<WAIT
 
 QVI and LE credentials granted to ${HOLDER_AID}.
@@ -197,6 +208,7 @@ Chain issued and granted to ${HOLDER_AID}.
 
 Next:
   registrar start --name Registrar --base ${DEV_LIVE_BASE} --alias Registrar --issuer ${QVI_AID}
-  (no echelon-server config is rendered for this chain; point Signet at your own server)
+  echelons serve --host 127.0.0.1 --port 8000 --name Provider --base ${DEV_LIVE_BASE} --alias Provider \\
+    --config ${DEV_LIVE_DIR}/server-lesr.config.yaml
   Locksmith: the holder admits the LESR on its next maintenance pass; env.out already has the OOBIs/env.
 DONE
